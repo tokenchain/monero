@@ -205,14 +205,17 @@ namespace cryptonote
       }
       size_t txidx = 0;
       ntxes += bd.second.size();
-      for(const auto& t: bd.second)
+      for (std::list<cryptonote::blobdata>::iterator i = bd.second.begin(); i != bd.second.end(); ++i)
       {
+        unpruned_size += i->size();
         if (req.prune)
-          res.blocks.back().txs.push_back(get_pruned_tx_blob(t));
+          res.blocks.back().txs.push_back(get_pruned_tx_blob(std::move(*i)));
         else
-          res.blocks.back().txs.push_back(t);
+          res.blocks.back().txs.push_back(std::move(*i));
+        i->clear();
+        i->shrink_to_fit();
         pruned_size += res.blocks.back().txs.back().size();
-        unpruned_size += t.size();
+
         res.output_indices.back().indices.push_back(COMMAND_RPC_GET_BLOCKS_FAST::tx_output_indices());
         bool r = m_core.get_tx_outputs_gindexs(b.tx_hashes[txidx++], res.output_indices.back().indices.back().indices);
         if (!r)
@@ -1720,6 +1723,26 @@ namespace cryptonote
       res.spans.push_back({span.start_block_height, span.nblocks, span.connection_id, (uint32_t)(span.rate + 0.5f), speed, span.size, address});
       return true;
     });
+
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_txpool_backlog(const COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG::request& req, COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG::response& res, epee::json_rpc::error& error_resp)
+  {
+    if(!check_core_busy())
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_CORE_BUSY;
+      error_resp.message = "Core is busy.";
+      return false;
+    }
+
+    if (!m_core.get_txpool_backlog(res.backlog))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Failed to get txpool backlog";
+      return false;
+    }
 
     res.status = CORE_RPC_STATUS_OK;
     return true;

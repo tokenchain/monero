@@ -382,7 +382,7 @@ namespace cryptonote
       boost::thread::attributes attrs;
       attrs.set_stack_size(THREAD_STACK_SIZE);
 
-      start(m_mine_address, m_threads_total, attrs, get_is_background_mining_enabled());
+      start(m_mine_address, m_threads_total, attrs, get_is_background_mining_enabled(), get_ignore_battery());
     }
   }
   //-----------------------------------------------------------------------------------------------------
@@ -412,8 +412,8 @@ namespace cryptonote
   bool miner::worker_thread()
   {
     uint32_t th_local_index = boost::interprocess::ipcdetail::atomic_inc32(&m_thread_index);
-    MGINFO("Miner thread was started ["<< th_local_index << "]");
     MLOG_SET_THREAD_NAME(std::string("[miner ") + std::to_string(th_local_index) + "]");
+    MGINFO("Miner thread was started ["<< th_local_index << "]");
     uint32_t nonce = m_starter_nonce + th_local_index;
     uint64_t height = 0;
     difficulty_type local_diff = 0;

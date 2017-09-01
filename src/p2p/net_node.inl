@@ -159,7 +159,7 @@ namespace nodetool
           }
           catch (const std::exception &e)
           {
-            LOG_ERROR("Failed to load p2p config file, falling back to default config");
+            MWARNING("Failed to load p2p config file, falling back to default config");
             m_peerlist = peerlist_manager(); // it was probably half clobbered by the failed load
             make_default_config();
           }
@@ -396,7 +396,7 @@ namespace nodetool
       }
       else
       {
-        MERROR("IPv6 unsupported, skip '" << host << "' -> " << endpoint.address().to_v6().to_string(ec));
+        MWARNING("IPv6 unsupported, skip '" << host << "' -> " << endpoint.address().to_v6().to_string(ec));
         throw std::runtime_error("IPv6 unsupported");
       }
     }
@@ -756,19 +756,19 @@ namespace nodetool
 
       if(code < 0)
       {
-        LOG_ERROR_CC(context, "COMMAND_HANDSHAKE invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
+        LOG_WARNING_CC(context, "COMMAND_HANDSHAKE invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
         return;
       }
 
       if(rsp.node_data.network_id != m_network_id)
       {
-        LOG_ERROR_CC(context, "COMMAND_HANDSHAKE Failed, wrong network!  (" << epee::string_tools::get_str_from_guid_a(rsp.node_data.network_id) << "), closing connection.");
+        LOG_WARNING_CC(context, "COMMAND_HANDSHAKE Failed, wrong network!  (" << epee::string_tools::get_str_from_guid_a(rsp.node_data.network_id) << "), closing connection.");
         return;
       }
 
       if(!handle_remote_peerlist(rsp.local_peerlist_new, rsp.node_data.local_time, context))
       {
-        LOG_ERROR_CC(context, "COMMAND_HANDSHAKE: failed to handle_remote_peerlist(...), closing connection.");
+        LOG_WARNING_CC(context, "COMMAND_HANDSHAKE: failed to handle_remote_peerlist(...), closing connection.");
         add_host_fail(context.m_remote_address);
         return;
       }
@@ -777,7 +777,7 @@ namespace nodetool
       {
         if(!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, true))
         {
-          LOG_ERROR_CC(context, "COMMAND_HANDSHAKE invoked, but process_payload_sync_data returned false, dropping connection.");
+          LOG_WARNING_CC(context, "COMMAND_HANDSHAKE invoked, but process_payload_sync_data returned false, dropping connection.");
           hsh_result = false;
           return;
         }
@@ -805,7 +805,7 @@ namespace nodetool
 
     if(!hsh_result)
     {
-      LOG_ERROR_CC(context_, "COMMAND_HANDSHAKE Failed");
+      LOG_WARNING_CC(context_, "COMMAND_HANDSHAKE Failed");
       m_net_server.get_config_object().close(context_.m_connection_id);
     }
     else
@@ -831,7 +831,7 @@ namespace nodetool
       context.m_in_timedsync = false;
       if(code < 0)
       {
-        LOG_ERROR_CC(context, "COMMAND_TIMED_SYNC invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
+        LOG_WARNING_CC(context, "COMMAND_TIMED_SYNC invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
         return;
       }
 
@@ -848,7 +848,7 @@ namespace nodetool
 
     if(!r)
     {
-      LOG_ERROR_CC(context_, "COMMAND_TIMED_SYNC Failed");
+      LOG_WARNING_CC(context_, "COMMAND_TIMED_SYNC Failed");
       return false;
     }
     return true;
@@ -1077,7 +1077,7 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::make_new_connection_from_anchor_peerlist(const std::vector<anchor_peerlist_entry>& anchor_peerlist)
   {
     for (const auto& pe: anchor_peerlist) {
-      _note("Considering connecting (out) to peer: " << pe.id << " " << pe.adr.str());
+      _note("Considering connecting (out) to peer: " << peerid_type(pe.id) << " " << pe.adr.str());
 
       if(is_peer_used(pe)) {
         _note("Peer is used");
@@ -1092,7 +1092,7 @@ namespace nodetool
         continue;
       }
 
-      MDEBUG("Selected peer: " << pe.id << " " << pe.adr.str()
+      MDEBUG("Selected peer: " << peerid_to_string(pe.id) << " " << pe.adr.str()
                                << "[peer_type=" << anchor
                                << "] first_seen: " << epee::misc_utils::get_time_interval_string(time(NULL) - pe.first_seen));
 
@@ -1126,6 +1126,8 @@ namespace nodetool
       size_t random_index;
 
       if (use_white_list) {
+        local_peers_count = m_peerlist.get_white_peers_count();
+        max_random_index = std::min<uint64_t>(local_peers_count -1, 20);
         random_index = get_random_index_with_fixed_probability(max_random_index);
       } else {
         random_index = crypto::rand<size_t>() % m_peerlist.get_gray_peers_count();
@@ -1143,7 +1145,7 @@ namespace nodetool
 
       ++try_count;
 
-      _note("Considering connecting (out) to peer: " << pe.id << " " << pe.adr.str());
+      _note("Considering connecting (out) to peer: " << peerid_to_string(pe.id) << " " << pe.adr.str());
 
       if(is_peer_used(pe)) {
         _note("Peer is used");
@@ -1156,7 +1158,7 @@ namespace nodetool
       if(is_addr_recently_failed(pe.adr))
         continue;
 
-      MDEBUG("Selected peer: " << pe.id << " " << pe.adr.str()
+      MDEBUG("Selected peer: " << peerid_to_string(pe.id) << " " << pe.adr.str()
                     << "[peer_list=" << (use_white_list ? white : gray)
                     << "] last_seen: " << (pe.last_seen ? epee::misc_utils::get_time_interval_string(time(NULL) - pe.last_seen) : "never"));
 
@@ -1171,14 +1173,11 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::connections_maker()
+  bool node_server<t_payload_net_handler>::connect_to_seed()
   {
-    if (!connect_to_peerlist(m_exclusive_peers)) return false;
+      if (m_seed_nodes.empty())
+        return true;
 
-    if (!m_exclusive_peers.empty()) return true;
-
-    if(!m_peerlist.get_white_peers_count() && m_seed_nodes.size())
-    {
       size_t try_count = 0;
       size_t current_index = crypto::rand<size_t>()%m_seed_nodes.size();
       bool fallback_nodes_added = false;
@@ -1211,6 +1210,21 @@ namespace nodetool
         if(++current_index >= m_seed_nodes.size())
           current_index = 0;
       }
+      return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::connections_maker()
+  {
+    if (!connect_to_peerlist(m_exclusive_peers)) return false;
+
+    if (!m_exclusive_peers.empty()) return true;
+
+    size_t start_conn_count = get_outgoing_connections_count();
+    if(!m_peerlist.get_white_peers_count() && m_seed_nodes.size())
+    {
+      if (!connect_to_seed())
+        return false;
     }
 
     if (!connect_to_peerlist(m_priority_peers)) return false;
@@ -1240,6 +1254,13 @@ namespace nodetool
         if(!make_expected_connections_count(white, m_config.m_net_config.connections_count))
           return false;
       }
+    }
+
+    if (start_conn_count == get_outgoing_connections_count() && start_conn_count < m_config.m_net_config.connections_count)
+    {
+      MINFO("Failed to connect to any, trying seeds");
+      if (!connect_to_seed())
+        return false;
     }
 
     return true;
@@ -1383,17 +1404,17 @@ namespace nodetool
     uint64_t time_delata = local_time > tr.time ? local_time - tr.time: tr.time - local_time;
     if(time_delata > 24*60*60 )
     {
-      LOG_ERROR("check_trust failed to check time conditions, local_time=" <<  local_time << ", proof_time=" << tr.time);
+      MWARNING("check_trust failed to check time conditions, local_time=" <<  local_time << ", proof_time=" << tr.time);
       return false;
     }
     if(m_last_stat_request_time >= tr.time )
     {
-      LOG_ERROR("check_trust failed to check time conditions, last_stat_request_time=" <<  m_last_stat_request_time << ", proof_time=" << tr.time);
+      MWARNING("check_trust failed to check time conditions, last_stat_request_time=" <<  m_last_stat_request_time << ", proof_time=" << tr.time);
       return false;
     }
     if(m_config.m_peer_id != tr.peer_id)
     {
-      LOG_ERROR("check_trust failed: peer_id mismatch (passed " << tr.peer_id << ", expected " << m_config.m_peer_id<< ")");
+      MWARNING("check_trust failed: peer_id mismatch (passed " << tr.peer_id << ", expected " << m_config.m_peer_id<< ")");
       return false;
     }
     crypto::public_key pk = AUTO_VAL_INIT(pk);
@@ -1401,7 +1422,7 @@ namespace nodetool
     crypto::hash h = get_proof_of_trust_hash(tr);
     if(!crypto::check_signature(h, pk, tr.sign))
     {
-      LOG_ERROR("check_trust failed: sign check failed");
+      MWARNING("check_trust failed: sign check failed");
       return false;
     }
     //update last request time
@@ -1562,13 +1583,13 @@ namespace nodetool
       {
         if(code <= 0)
         {
-          LOG_ERROR_CC(ping_context, "Failed to invoke COMMAND_PING to " << address.str() << "(" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
+          LOG_WARNING_CC(ping_context, "Failed to invoke COMMAND_PING to " << address.str() << "(" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
           return;
         }
 
         if(rsp.status != PING_OK_RESPONSE_STATUS_TEXT || pr != rsp.peer_id)
         {
-          LOG_ERROR_CC(ping_context, "back ping invoke wrong response \"" << rsp.status << "\" from" << address.str() << ", hsh_peer_id=" << pr_ << ", rsp.peer_id=" << rsp.peer_id);
+          LOG_WARNING_CC(ping_context, "back ping invoke wrong response \"" << rsp.status << "\" from" << address.str() << ", hsh_peer_id=" << pr_ << ", rsp.peer_id=" << rsp.peer_id);
           m_net_server.get_config_object().close(ping_context.m_connection_id);
           return;
         }
@@ -1578,7 +1599,7 @@ namespace nodetool
 
       if(!inv_call_res)
       {
-        LOG_ERROR_CC(ping_context, "back ping invoke failed to " << address.str());
+        LOG_WARNING_CC(ping_context, "back ping invoke failed to " << address.str());
         m_net_server.get_config_object().close(ping_context.m_connection_id);
         return false;
       }
@@ -1586,7 +1607,7 @@ namespace nodetool
     });
     if(!r)
     {
-      LOG_ERROR_CC(context, "Failed to call connect_async, network error.");
+      LOG_WARNING_CC(context, "Failed to call connect_async, network error.");
     }
     return r;
   }
@@ -1605,7 +1626,7 @@ namespace nodetool
       {  
         if(code < 0)
         {
-          LOG_ERROR_CC(context_, "COMMAND_REQUEST_SUPPORT_FLAGS invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
+          LOG_WARNING_CC(context_, "COMMAND_REQUEST_SUPPORT_FLAGS invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
           return;
         }
         
@@ -1622,7 +1643,7 @@ namespace nodetool
   {
     if(!m_payload_handler.process_payload_sync_data(arg.payload_data, context, false))
     {
-      LOG_ERROR_CC(context, "Failed to process_payload_sync_data(), dropping connection");
+      LOG_WARNING_CC(context, "Failed to process_payload_sync_data(), dropping connection");
       drop_connection(context);
       return 1;
     }
@@ -1649,7 +1670,7 @@ namespace nodetool
 
     if(!context.m_is_income)
     {
-      LOG_ERROR_CC(context, "COMMAND_HANDSHAKE came not from incoming connection");
+      LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came not from incoming connection");
       drop_connection(context);
       add_host_fail(context.m_remote_address);
       return 1;
@@ -1657,14 +1678,14 @@ namespace nodetool
 
     if(context.peer_id)
     {
-      LOG_ERROR_CC(context, "COMMAND_HANDSHAKE came, but seems that connection already have associated peer_id (double COMMAND_HANDSHAKE?)");
+      LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came, but seems that connection already have associated peer_id (double COMMAND_HANDSHAKE?)");
       drop_connection(context);
       return 1;
     }
 
     if(!m_payload_handler.process_payload_sync_data(arg.payload_data, context, true))
     {
-      LOG_ERROR_CC(context, "COMMAND_HANDSHAKE came, but process_payload_sync_data returned false, dropping connection.");
+      LOG_WARNING_CC(context, "COMMAND_HANDSHAKE came, but process_payload_sync_data returned false, dropping connection.");
       drop_connection(context);
       return 1;
     }
@@ -1678,6 +1699,7 @@ namespace nodetool
 
     //associate peer_id with this connection
     context.peer_id = arg.node_data.peer_id;
+    context.m_in_timedsync = false;
 
     if(arg.node_data.peer_id != m_config.m_peer_id && arg.node_data.my_port)
     {
@@ -1772,6 +1794,8 @@ namespace nodetool
 
       m_peerlist.remove_from_peer_anchor(na);
     }
+
+    m_payload_handler.on_connection_close(context);
 
     MINFO("["<< epee::net_utils::print_connection_context(context) << "] CLOSE CONNECTION");
   }
@@ -1938,14 +1962,14 @@ namespace nodetool
     if (!success) {
       m_peerlist.remove_from_peer_gray(pe);
 
-      LOG_PRINT_L2("PEER EVICTED FROM GRAY PEER LIST IP address: " << pe.adr.host_str() << " Peer ID: " << std::hex << pe.id);
+      LOG_PRINT_L2("PEER EVICTED FROM GRAY PEER LIST IP address: " << pe.adr.host_str() << " Peer ID: " << peerid_type(pe.id));
 
       return true;
     }
 
     m_peerlist.set_peer_just_seen(pe.id, pe.adr);
 
-    LOG_PRINT_L2("PEER PROMOTED TO WHITE PEER LIST IP address: " << pe.adr.host_str() << " Peer ID: " << std::hex << pe.id);
+    LOG_PRINT_L2("PEER PROMOTED TO WHITE PEER LIST IP address: " << pe.adr.host_str() << " Peer ID: " << peerid_type(pe.id));
 
     return true;
   }

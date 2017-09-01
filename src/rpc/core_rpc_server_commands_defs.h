@@ -1071,6 +1071,33 @@ namespace cryptonote
     };
   };
 
+  struct tx_backlog_entry
+  {
+    uint64_t blob_size;
+    uint64_t fee;
+    uint64_t time_in_pool;
+  };
+
+  struct COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG
+  {
+    struct request
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+      END_KV_SERIALIZE_MAP()
+    };
+
+    struct response
+    {
+      std::string status;
+      std::vector<tx_backlog_entry> backlog;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(status)
+        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(backlog)
+      END_KV_SERIALIZE_MAP()
+    };
+  };
+
   struct txpool_histo
   {
     uint32_t txs;
@@ -1087,6 +1114,7 @@ namespace cryptonote
     uint64_t bytes_total;
     uint32_t bytes_min;
     uint32_t bytes_max;
+    uint32_t bytes_med;
     uint64_t fee_total;
     uint64_t oldest;
     uint32_t txs_total;
@@ -1100,6 +1128,7 @@ namespace cryptonote
       KV_SERIALIZE(bytes_total)
       KV_SERIALIZE(bytes_min)
       KV_SERIALIZE(bytes_max)
+      KV_SERIALIZE(bytes_med)
       KV_SERIALIZE(fee_total)
       KV_SERIALIZE(oldest)
       KV_SERIALIZE(txs_total)

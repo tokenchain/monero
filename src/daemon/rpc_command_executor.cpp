@@ -55,7 +55,9 @@ namespace {
     std::string port_str;
     std::string elapsed = epee::misc_utils::get_time_interval_string(now - last_seen);
     std::string ip_str = epee::string_tools::get_ip_string_from_int32(peer.ip);
-    epee::string_tools::xtype_to_string(peer.id, id_str);
+    std::stringstream peer_id_str;
+    peer_id_str << std::hex << std::setw(16) << peer.id;
+    peer_id_str >> id_str;
     epee::string_tools::xtype_to_string(peer.port, port_str);
     std::string addr_str = ip_str + ":" + port_str;
     tools::msg_writer() << boost::format("%-10s %-25s %-25s %s") % prefix % id_str % addr_str % elapsed;
@@ -110,13 +112,6 @@ namespace {
     if (status == CORE_RPC_STATUS_OK)
       return base;
     return base + " -- " + status;
-  }
-
-  std::string pad(std::string s, size_t n)
-  {
-    if (s.size() < n)
-      s.append(n - s.size(), ' ');
-    return s;
   }
 }
 
@@ -490,7 +485,7 @@ bool t_rpc_command_executor::print_connections() {
     tools::msg_writer() 
      //<< std::setw(30) << std::left << in_out
      << std::setw(30) << std::left << address
-     << std::setw(20) << info.peer_id
+     << std::setw(20) << epee::string_tools::pad_string(info.peer_id, 16, '0', true)
      << std::setw(20) << info.support_flags
      << std::setw(30) << std::to_string(info.recv_count) + "("  + std::to_string(info.recv_idle_time) + ")/" + std::to_string(info.send_count) + "(" + std::to_string(info.send_idle_time) + ")"
      << std::setw(25) << info.state
@@ -932,12 +927,18 @@ bool t_rpc_command_executor::print_transaction_pool_short() {
 bool t_rpc_command_executor::print_transaction_pool_stats() {
   cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL_STATS::request req;
   cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL_STATS::response res;
+  cryptonote::COMMAND_RPC_GET_INFO::request ireq;
+  cryptonote::COMMAND_RPC_GET_INFO::response ires;
 
   std::string fail_message = "Problem fetching transaction pool stats";
 
   if (m_is_rpc)
   {
     if (!m_rpc_client->rpc_request(req, res, "/get_transaction_pool_stats", fail_message.c_str()))
+    {
+      return true;
+    }
+    if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
     {
       return true;
     }
@@ -950,15 +951,32 @@ bool t_rpc_command_executor::print_transaction_pool_stats() {
       tools::fail_msg_writer() << make_error(fail_message, res.status);
       return true;
     }
+    if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
+    {
+      tools::fail_msg_writer() << make_error(fail_message, ires.status);
+      return true;
+    }
   }
 
   size_t n_transactions = res.pool_stats.txs_total;
   const uint64_t now = time(NULL);
   size_t avg_bytes = n_transactions ? res.pool_stats.bytes_total / n_transactions : 0;
 
-  tools::msg_writer() << n_transactions << " tx(es), " << res.pool_stats.bytes_total << " bytes total (min " << res.pool_stats.bytes_min << ", max " << res.pool_stats.bytes_max << ", avg " << avg_bytes << ")" << std::endl
-      << "fees " << cryptonote::print_money(res.pool_stats.fee_total) << " (avg " << cryptonote::print_money(n_transactions ? res.pool_stats.fee_total / n_transactions : 0) << " per tx" << ", " << cryptonote::print_money(res.pool_stats.bytes_total ? res.pool_stats.fee_total / res.pool_stats.bytes_total : 0) << " per byte )" << std::endl
-      << res.pool_stats.num_not_relayed << " not relayed, " << res.pool_stats.num_failing << " failing, " << res.pool_stats.num_10m << " older than 10 minutes (oldest " << (res.pool_stats.oldest == 0 ? "-" : get_human_time_ago(res.pool_stats.oldest, now)) << ")";
+  std::string backlog_message;
+  const uint64_t full_reward_zone = ires.block_size_limit / 2;
+  if (res.pool_stats.bytes_total <= full_reward_zone)
+  {
+    backlog_message = "no backlog";
+  }
+  else
+  {
+    uint64_t backlog = (res.pool_stats.bytes_total + full_reward_zone - 1) / full_reward_zone;
+    backlog_message = (boost::format("estimated %u block (%u minutes) backlog") % backlog % (backlog * DIFFICULTY_TARGET_V2 / 60)).str();
+  }
+
+  tools::msg_writer() << n_transactions << " tx(es), " << res.pool_stats.bytes_total << " bytes total (min " << res.pool_stats.bytes_min << ", max " << res.pool_stats.bytes_max << ", avg " << avg_bytes << ", median " << res.pool_stats.bytes_med << ")" << std::endl
+      << "fees " << cryptonote::print_money(res.pool_stats.fee_total) << " (avg " << cryptonote::print_money(n_transactions ? res.pool_stats.fee_total / n_transactions : 0) << " per tx" << ", " << cryptonote::print_money(res.pool_stats.bytes_total ? res.pool_stats.fee_total / res.pool_stats.bytes_total : 0) << " per byte)" << std::endl
+      << res.pool_stats.num_not_relayed << " not relayed, " << res.pool_stats.num_failing << " failing, " << res.pool_stats.num_10m << " older than 10 minutes (oldest " << (res.pool_stats.oldest == 0 ? "-" : get_human_time_ago(res.pool_stats.oldest, now)) << "), " << backlog_message;
 
   if (n_transactions > 1 && res.pool_stats.histo.size())
   {
@@ -1737,12 +1755,12 @@ bool t_rpc_command_executor::sync_info()
     tools::success_msg_writer() << std::to_string(res.peers.size()) << " peers";
     for (const auto &p: res.peers)
     {
-      std::string address = pad(p.info.address, 24);
+      std::string address = epee::string_tools::pad_string(p.info.address, 24);
       uint64_t nblocks = 0, size = 0;
       for (const auto &s: res.spans)
         if (s.rate > 0.0f && s.connection_id == p.info.connection_id)
           nblocks += s.nblocks, size += s.size;
-      tools::success_msg_writer() << address << "  " << p.info.peer_id << "  " << p.info.current_download << " kB/s, " << nblocks << " blocks / " << size/1e6 << " MB queued";
+      tools::success_msg_writer() << address << "  " << epee::string_tools::pad_string(p.info.peer_id, 16, '0', true) << "  " << p.info.height << "  "  << p.info.current_download << " kB/s, " << nblocks << " blocks / " << size/1e6 << " MB queued";
     }
 
     uint64_t total_size = 0;
@@ -1751,7 +1769,7 @@ bool t_rpc_command_executor::sync_info()
     tools::success_msg_writer() << std::to_string(res.spans.size()) << " spans, " << total_size/1e6 << " MB";
     for (const auto &s: res.spans)
     {
-      std::string address = pad(s.remote_address, 24);
+      std::string address = epee::string_tools::pad_string(s.remote_address, 24);
       if (s.size == 0)
       {
         tools::success_msg_writer() << address << "  " << s.nblocks << " (" << s.start_block_height << " - " << (s.start_block_height + s.nblocks - 1) << ")  -";

@@ -38,6 +38,7 @@
 #include <string>
 #include <ctime>
 
+#include "math_helper.h"
 #include "storages/levin_abstract_invoke2.h"
 #include "warnings.h"
 #include "cryptonote_protocol_defs.h"
@@ -110,6 +111,7 @@ namespace cryptonote
     std::list<connection_info> get_connections();
     const block_queue &get_block_queue() const { return m_block_queue; }
     void stop();
+    void on_connection_close(cryptonote_connection_context &context);
   private:
     //----------------- commands handlers ----------------------------------------------
     int handle_notify_new_block(int command, NOTIFY_NEW_BLOCK::request& arg, cryptonote_connection_context& context);
@@ -130,6 +132,10 @@ namespace cryptonote
     size_t get_synchronizing_connections_count();
     bool on_connection_synchronized();
     bool should_download_next_span(cryptonote_connection_context& context) const;
+    void drop_connection(cryptonote_connection_context &context, bool add_fail, bool flush_all_spans);
+    bool kick_idle_peers();
+    int try_add_next_blocks(cryptonote_connection_context &context);
+
     t_core& m_core;
 
     nodetool::p2p_endpoint_stub<connection_context> m_p2p_stub;
@@ -139,6 +145,7 @@ namespace cryptonote
     std::atomic<bool> m_stopping;
     boost::mutex m_sync_lock;
     block_queue m_block_queue;
+    epee::math_helper::once_a_time_seconds<30> m_idle_peer_kicker;
 
     boost::mutex m_buffer_mutex;
     double get_avg_block_size();

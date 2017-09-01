@@ -596,6 +596,9 @@ struct Wallet
     virtual bool verifySignedMessage(const std::string &message, const std::string &addres, const std::string &signature) const = 0;
 
     virtual bool parse_uri(const std::string &uri, std::string &address, std::string &payment_id, uint64_t &amount, std::string &tx_description, std::string &recipient_name, std::vector<std::string> &unknown_parameters, std::string &error) = 0;
+
+    virtual std::string getDefaultDataDir() const = 0;
+   
    /*
     * \brief rescanSpent - Rescan spent outputs - Can only be used with trusted daemon
     * \return true on success
@@ -669,9 +672,18 @@ struct WalletManager
     /*!
      * @brief TODO: delme walletExists - check if the given filename is the wallet
      * @param path - filename
-     * @return
+     * @return - true if wallet exists
      */
     virtual bool walletExists(const std::string &path) = 0;
+
+    /*!
+     * @brief verifyWalletPassword - check if the given filename is the wallet
+     * @param keys_file_name - location of keys file
+     * @param password - password to verify
+     * @param watch_only - verify only view keys?
+     * @return - true if password is correct
+     */
+    virtual bool verifyWalletPassword(const std::string &keys_file_name, const std::string &password, bool watch_only) const = 0;
 
     /*!
      * \brief findWallets - searches for the wallet files by given path name recursively

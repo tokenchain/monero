@@ -120,6 +120,7 @@ namespace cryptonote
     bool set_min_output_count(const std::vector<std::string> &args = std::vector<std::string>());
     bool set_min_output_value(const std::vector<std::string> &args = std::vector<std::string>());
     bool set_merge_destinations(const std::vector<std::string> &args = std::vector<std::string>());
+    bool set_confirm_backlog(const std::vector<std::string> &args = std::vector<std::string>());
     bool help(const std::vector<std::string> &args = std::vector<std::string>());
     bool start_mining(const std::vector<std::string> &args);
     bool stop_mining(const std::vector<std::string> &args);
@@ -182,6 +183,7 @@ namespace cryptonote
     bool accept_loaded_tx(const tools::wallet2::unsigned_tx_set &txs);
     bool accept_loaded_tx(const tools::wallet2::signed_tx_set &txs);
     bool print_ring_members(const std::vector<tools::wallet2::pending_tx>& ptx_vector, std::ostream& ostr);
+    std::string get_prompt() const;
 
     /*!
      * \brief Prints the seed with a nice message
@@ -266,6 +268,7 @@ namespace cryptonote
     std::string m_generate_from_keys;
     std::string m_generate_from_multisig_keys;
     std::string m_generate_from_json;
+    std::string m_mnemonic_language;
     std::string m_import_path;
 
     std::string m_electrum_seed;  // electrum-style seed parameter

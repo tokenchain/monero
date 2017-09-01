@@ -213,7 +213,7 @@ const std::string lmdb_error(const std::string& error_string, int mdb_res)
 inline void lmdb_db_open(MDB_txn* txn, const char* name, int flags, MDB_dbi& dbi, const std::string& error_string)
 {
   if (auto res = mdb_dbi_open(txn, name, flags, &dbi))
-    throw0(cryptonote::DB_OPEN_FAILURE(lmdb_error(error_string + " : ", res).c_str()));
+    throw0(cryptonote::DB_OPEN_FAILURE((lmdb_error(error_string + " : ", res) + std::string(" - you may want to start with --db-salvage")).c_str()));
 }
 
 
@@ -1083,9 +1083,10 @@ BlockchainLMDB::BlockchainLMDB(bool batch_transactions)
   m_hardfork = nullptr;
 }
 
-void BlockchainLMDB::open(const std::string& filename, const int mdb_flags)
+void BlockchainLMDB::open(const std::string& filename, const int db_flags)
 {
   int result;
+  int mdb_flags = MDB_NORDAHEAD;
 
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
 
@@ -1123,6 +1124,15 @@ void BlockchainLMDB::open(const std::string& filename, const int mdb_flags)
     throw0(DB_ERROR(lmdb_error("Failed to set max number of dbs: ", result).c_str()));
 
   size_t mapsize = DEFAULT_MAPSIZE;
+
+  if (db_flags & DBF_FAST)
+    mdb_flags |= MDB_NOSYNC;
+  if (db_flags & DBF_FASTEST)
+    mdb_flags |= MDB_NOSYNC | MDB_WRITEMAP | MDB_MAPASYNC;
+  if (db_flags & DBF_RDONLY)
+    mdb_flags = MDB_RDONLY;
+  if (db_flags & DBF_SALVAGE)
+    mdb_flags |= MDB_PREVSNAPSHOT;
 
   if (auto result = mdb_env_open(m_env, filename.c_str(), mdb_flags, 0644))
     throw0(DB_ERROR(lmdb_error("Failed to open lmdb environment: ", result).c_str()));
@@ -1306,6 +1316,11 @@ void BlockchainLMDB::sync()
   {
     throw0(DB_ERROR(lmdb_error("Failed to sync database: ", result).c_str()));
   }
+}
+
+void BlockchainLMDB::safesyncmode(const bool onoff)
+{
+  mdb_env_set_flags(m_env, MDB_NOSYNC|MDB_MAPASYNC, !onoff);
 }
 
 void BlockchainLMDB::reset()

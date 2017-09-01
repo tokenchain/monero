@@ -428,6 +428,13 @@ namespace cryptonote
      bool get_pool_transactions(std::list<transaction>& txs) const;
      
      /**
+      * @copydoc tx_memory_pool::get_txpool_backlog
+      *
+      * @note see tx_memory_pool::get_txpool_backlog
+      */
+     bool get_txpool_backlog(std::vector<tx_backlog_entry>& backlog) const;
+     
+     /**
       * @copydoc tx_memory_pool::get_transactions
       *
       * @note see tx_memory_pool::get_transactions
@@ -521,6 +528,13 @@ namespace cryptonote
      crypto::hash get_tail_id() const;
 
      /**
+      * @copydoc Blockchain::get_block_cumulative_difficulty
+      *
+      * @note see Blockchain::get_block_cumulative_difficulty
+      */
+     difficulty_type get_block_cumulative_difficulty(uint64_t height) const;
+
+     /**
       * @copydoc Blockchain::get_random_outs_for_amounts
       *
       * @note see Blockchain::get_random_outs_for_amounts
@@ -607,6 +621,13 @@ namespace cryptonote
      void on_synchronized();
 
      /**
+      * @copydoc Blockchain::safesyncmode
+      *
+      * 2note see Blockchain::safesyncmode
+      */
+     void safesyncmode(const bool onoff);
+
+     /**
       * @brief sets the target blockchain height
       *
       * @param target_blockchain_height the height to set
@@ -619,6 +640,20 @@ namespace cryptonote
       * @param target_blockchain_height the target height
       */
      uint64_t get_target_blockchain_height() const;
+
+     /**
+      * @brief return the ideal hard fork version for a given block height
+      *
+      * @return what it says above
+      */
+     uint8_t get_ideal_hard_fork_version(uint64_t height) const;
+
+     /**
+      * @brief return the hard fork version for a given block height
+      *
+      * @return what it says above
+      */
+     uint8_t get_hard_fork_version(uint64_t height) const;
 
      /**
       * @brief gets start_time
@@ -677,7 +712,7 @@ namespace cryptonote
       *
       * @return the number of blocks to sync in one go
       */
-     size_t get_block_sync_size() const { return block_sync_size; }
+     size_t get_block_sync_size(uint64_t height) const;
 
      /**
       * @brief get the sum of coinbase tx amounts between blocks

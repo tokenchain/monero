@@ -59,6 +59,8 @@
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "blockchain"
 
+#define FIND_BLOCKCHAIN_SUPPLEMENT_MAX_SIZE (100*1024*1024) // 100 MB
+
 //#include "serialization/json_archive.h"
 
 /* TODO:
@@ -99,6 +101,9 @@ static const struct {
   
   // version 5 starts from block 1288616, which is on or around the 15th of April, 2017. Fork time finalised on 2017-03-14.
   { 5, 1288616, 0, 1489520158 },  
+
+  // version 6 starts from block 1400000, which is on or around the 16th of September, 2017. Fork time finalised on 2017-08-18.
+  { 6, 1400000, 0, 1503046577 },
 };
 static const uint64_t mainnet_hard_fork_version_1_till = 1009826;
 
@@ -125,8 +130,8 @@ static const uint64_t testnet_hard_fork_version_1_till = 624633;
 
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
-  m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_timestamps_and_difficulties_height(0), m_current_block_cumul_sz_limit(0), m_is_in_checkpoint_zone(false),
-  m_is_blockchain_storing(false), m_enforce_dns_checkpoints(false), m_max_prepare_blocks_threads(4), m_db_blocks_per_sync(1), m_db_sync_mode(db_async), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0), m_cancel(false)
+  m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_timestamps_and_difficulties_height(0), m_current_block_cumul_sz_limit(0),
+  m_enforce_dns_checkpoints(false), m_max_prepare_blocks_threads(4), m_db_blocks_per_sync(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0), m_cancel(false)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 }
@@ -1353,7 +1358,6 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     }
 
     // Check the block's hash against the difficulty target for its alt chain
-    m_is_in_checkpoint_zone = false;
     difficulty_type current_diff = get_next_difficulty_for_alternative_chain(alt_chain, bei);
     CHECK_AND_ASSERT_MES(current_diff, false, "!!!!!!! DIFFICULTY OVERHEAD !!!!!!!");
     crypto::hash proof_of_work = null_hash;
@@ -1428,7 +1432,9 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
   {
     //block orphaned
     bvc.m_marked_as_orphaned = true;
-    MERROR_VER("Block recognized as orphaned and rejected, id = " << id);
+    MERROR_VER("Block recognized as orphaned and rejected, id = " << id << ", height " << block_height
+        << ", parent in alt " << (it_prev != m_alternative_chains.end()) << ", parent in main " << parent_in_main
+        << " (parent " << b.prev_id << ", current top " << get_tail_id() << ", chain height " << get_current_blockchain_height() << ")");
   }
 
   return true;
@@ -2037,6 +2043,7 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
   {
     resp.m_block_ids.push_back(m_db->get_block_hash_from_height(i));
   }
+  resp.cumulative_difficulty = m_db->get_block_cumulative_difficulty(m_db->height() - 1);
   m_db->block_txn_stop();
   return true;
 }
@@ -2070,8 +2077,8 @@ bool Blockchain::find_blockchain_supplement(const uint64_t req_start_block, cons
 
   m_db->block_txn_start(true);
   total_height = get_current_blockchain_height();
-  size_t count = 0;
-  for(size_t i = start_height; i < total_height && count < max_count; i++, count++)
+  size_t count = 0, size = 0;
+  for(size_t i = start_height; i < total_height && count < max_count && (size < FIND_BLOCKCHAIN_SUPPLEMENT_MAX_SIZE || count < 3); i++, count++)
   {
     blocks.resize(blocks.size()+1);
     blocks.back().first = m_db->get_block_blob_from_height(i);
@@ -2080,6 +2087,9 @@ bool Blockchain::find_blockchain_supplement(const uint64_t req_start_block, cons
     std::list<crypto::hash> mis;
     get_transactions_blobs(b.tx_hashes, blocks.back().second, mis);
     CHECK_AND_ASSERT_MES(!mis.size(), false, "internal error, transaction from block not found");
+    size += blocks.back().first.size();
+    for (const auto &t: blocks.back().second)
+      size += t.size();
   }
   m_db->block_txn_stop();
   return true;
@@ -2499,7 +2509,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     assert(it != m_check_txin_table.end());
   }
 
-  uint64_t t_t1 = 0;
   std::vector<std::vector<rct::ctkey>> pubkeys(tx.vin.size());
   std::vector < uint64_t > results;
   results.resize(tx.vin.size(), 0);
@@ -2633,7 +2642,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
       if (failed)
       {
-        MERROR_VER("Failed to check ring signatures!, t_loop: " << t_t1);
+        MERROR_VER("Failed to check ring signatures!");
         return false;
       }
     }
@@ -2782,12 +2791,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 //------------------------------------------------------------------
 void Blockchain::check_ring_signature(const crypto::hash &tx_prefix_hash, const crypto::key_image &key_image, const std::vector<rct::ctkey> &pubkeys, const std::vector<crypto::signature>& sig, uint64_t &result)
 {
-  if (m_is_in_checkpoint_zone)
-  {
-    result = true;
-    return;
-  }
-
   std::vector<const crypto::public_key *> p_output_keys;
   for (auto &key : pubkeys)
   {
@@ -3883,15 +3886,15 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::list<block_complete_e
           offset_map[in_to_key.amount].push_back(offset);
 
       }
-
-      // sort and remove duplicate absolute_offsets in offset_map
-      for (auto &offsets : offset_map)
-      {
-        std::sort(offsets.second.begin(), offsets.second.end());
-        auto last = std::unique(offsets.second.begin(), offsets.second.end());
-        offsets.second.erase(last, offsets.second.end());
-      }
     }
+  }
+
+  // sort and remove duplicate absolute_offsets in offset_map
+  for (auto &offsets : offset_map)
+  {
+    std::sort(offsets.second.begin(), offsets.second.end());
+    auto last = std::unique(offsets.second.begin(), offsets.second.end());
+    offsets.second.erase(last, offsets.second.end());
   }
 
   // [output] stores all transactions for each tx_out_index::hash found
@@ -4039,10 +4042,27 @@ bool Blockchain::for_all_txpool_txes(std::function<bool(const crypto::hash&, con
 
 void Blockchain::set_user_options(uint64_t maxthreads, uint64_t blocks_per_sync, blockchain_db_sync_mode sync_mode, bool fast_sync)
 {
+  if (sync_mode == db_defaultsync)
+  {
+    m_db_default_sync = true;
+    sync_mode = db_async;
+  }
   m_db_sync_mode = sync_mode;
   m_fast_sync = fast_sync;
   m_db_blocks_per_sync = blocks_per_sync;
   m_max_prepare_blocks_threads = maxthreads;
+}
+
+void Blockchain::safesyncmode(const bool onoff)
+{
+  /* all of this is no-op'd if the user set a specific
+   * --db-sync-mode at startup.
+   */
+  if (m_db_default_sync)
+  {
+    m_db->safesyncmode(onoff);
+    m_db_sync_mode = onoff ? db_nosync : db_async;
+  }
 }
 
 HardFork::State Blockchain::get_hard_fork_state() const

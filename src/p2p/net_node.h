@@ -61,7 +61,7 @@ namespace nodetool
   template<class base_type>
   struct p2p_connection_context_t: base_type //t_payload_net_handler::connection_context //public net_utils::connection_context_base
   {
-    p2p_connection_context_t(): support_flags(0), m_in_timedsync(false) {}
+    p2p_connection_context_t(): peer_id(0), support_flags(0), m_in_timedsync(false) {}
 
     peerid_type peer_id;
     uint32_t support_flags;
@@ -226,6 +226,7 @@ namespace nodetool
     bool is_addr_recently_failed(const epee::net_utils::network_address& addr);
     bool is_priority_node(const epee::net_utils::network_address& na);
     std::set<std::string> get_seed_nodes(bool testnet) const;
+    bool connect_to_seed();
 
     template <class Container>
     bool connect_to_peerlist(const Container& peers);

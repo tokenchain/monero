@@ -26,25 +26,49 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(core_proxy_sources
-  core_proxy.cpp)
+set(cn_deserialize_sources
+  cn_deserialize.cpp
+  )
 
-set(core_proxy_headers
-  core_proxy.h)
+monero_add_executable(cn_deserialize
+  ${cn_deserialize_sources}
+  ${cn_deserialize_private_headers})
 
-add_executable(core_proxy
-  ${core_proxy_sources}
-  ${core_proxy_headers})
-target_link_libraries(core_proxy
-  PRIVATE
+target_link_libraries(cn_deserialize
+  LINK_PRIVATE
     cryptonote_core
-    cryptonote_protocol
     common
     blockchain_db
     p2p
     epee
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES})
-set_property(TARGET core_proxy
-  PROPERTY
-    FOLDER "tests")
+    ${CMAKE_THREAD_LIBS_INIT})
+
+add_dependencies(cn_deserialize
+	version)
+set_property(TARGET cn_deserialize
+	PROPERTY
+	OUTPUT_NAME "monero-utils-deserialize")
+
+
+set(object_sizes_sources
+  object_sizes.cpp
+  )
+
+monero_add_executable(object_sizes
+  ${object_sizes_sources}
+  ${object_sizes_private_headers})
+
+target_link_libraries(object_sizes
+  LINK_PRIVATE
+    cryptonote_core
+    blockchain_db
+    p2p
+    epee
+    ${CMAKE_THREAD_LIBS_INIT})
+
+add_dependencies(object_sizes
+	version)
+set_property(TARGET object_sizes
+	PROPERTY
+	OUTPUT_NAME "monero-utils-object-sizes")
+

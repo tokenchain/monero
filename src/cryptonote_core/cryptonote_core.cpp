@@ -48,10 +48,6 @@ using namespace epee;
 #include "cryptonote_basic/checkpoints.h"
 #include "ringct/rctTypes.h"
 #include "blockchain_db/blockchain_db.h"
-#include "blockchain_db/lmdb/db_lmdb.h"
-#if defined(BERKELEY_DB)
-#include "blockchain_db/berkeleydb/db_bdb.h"
-#endif
 #include "ringct/rctSigs.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
@@ -164,6 +160,7 @@ namespace cryptonote
     command_line::add_arg(desc, command_line::arg_prep_blocks_threads);
     command_line::add_arg(desc, command_line::arg_fast_block_sync);
     command_line::add_arg(desc, command_line::arg_db_sync_mode);
+    command_line::add_arg(desc, command_line::arg_db_salvage);
     command_line::add_arg(desc, command_line::arg_show_time_stats);
     command_line::add_arg(desc, command_line::arg_block_sync_size);
     command_line::add_arg(desc, command_line::arg_check_updates);
@@ -245,6 +242,12 @@ namespace cryptonote
     return m_blockchain_storage.get_transactions_blobs(txs_ids, txs, missed_txs);
   }
   //-----------------------------------------------------------------------------------------------
+  bool core::get_txpool_backlog(std::vector<tx_backlog_entry>& backlog) const
+  {
+    m_mempool.get_transaction_backlog(backlog);
+    return true;
+  }
+  //-----------------------------------------------------------------------------------------------
   bool core::get_transactions(const std::vector<crypto::hash>& txs_ids, std::list<transaction>& txs, std::list<crypto::hash>& missed_txs) const
   {
     return m_blockchain_storage.get_transactions(txs_ids, txs, missed_txs);
@@ -278,6 +281,7 @@ namespace cryptonote
 
     std::string db_type = command_line::get_arg(vm, command_line::arg_db_type);
     std::string db_sync_mode = command_line::get_arg(vm, command_line::arg_db_sync_mode);
+    bool db_salvage = command_line::get_arg(vm, command_line::arg_db_salvage) != 0;
     bool fast_sync = command_line::get_arg(vm, command_line::arg_fast_block_sync) != 0;
     uint64_t blocks_threads = command_line::get_arg(vm, command_line::arg_prep_blocks_threads);
     std::string check_updates_string = command_line::get_arg(vm, command_line::arg_check_updates);
@@ -306,18 +310,8 @@ namespace cryptonote
     // folder might not be a directory, etc, etc
     catch (...) { }
 
-    BlockchainDB* db = nullptr;
-    uint64_t DBS_FAST_MODE = 0;
-    uint64_t DBS_FASTEST_MODE = 0;
-    uint64_t DBS_SAFE_MODE = 0;
-    if (db_type == "lmdb")
-    {
-      db = new BlockchainLMDB();
-      DBS_SAFE_MODE = MDB_NORDAHEAD;
-      DBS_FAST_MODE = MDB_NORDAHEAD | MDB_NOSYNC;
-      DBS_FASTEST_MODE = MDB_NORDAHEAD | MDB_NOSYNC | MDB_WRITEMAP | MDB_MAPASYNC;
-    }
-    else
+    BlockchainDB* db = new_db(db_type);
+    if (db == NULL)
     {
       LOG_ERROR("Attempted to use non-existent database type");
       return false;
@@ -328,7 +322,7 @@ namespace cryptonote
 
     const std::string filename = folder.string();
     // default to fast:async:1
-    blockchain_db_sync_mode sync_mode = db_async;
+    blockchain_db_sync_mode sync_mode = db_defaultsync;
     uint64_t blocks_per_sync = 1;
 
     try
@@ -343,7 +337,7 @@ namespace cryptonote
         MDEBUG("option: " << option);
 
       // default to fast:async:1
-      uint64_t DEFAULT_FLAGS = DBS_FAST_MODE;
+      uint64_t DEFAULT_FLAGS = DBF_FAST;
 
       if(options.size() == 0)
       {
@@ -357,15 +351,19 @@ namespace cryptonote
         if(options[0] == "safe")
         {
           safemode = true;
-          db_flags = DBS_SAFE_MODE;
+          db_flags = DBF_SAFE;
           sync_mode = db_nosync;
         }
         else if(options[0] == "fast")
-          db_flags = DBS_FAST_MODE;
+        {
+          db_flags = DBF_FAST;
+          sync_mode = db_async;
+        }
         else if(options[0] == "fastest")
         {
-          db_flags = DBS_FASTEST_MODE;
+          db_flags = DBF_FASTEST;
           blocks_per_sync = 1000; // default to fastest:async:1000
+          sync_mode = db_async;
         }
         else
           db_flags = DEFAULT_FLAGS;
@@ -386,6 +384,9 @@ namespace cryptonote
         if (*endptr == '\0')
           blocks_per_sync = bps;
       }
+
+      if (db_salvage)
+        db_flags |= DBF_SALVAGE;
 
       db->open(filename, db_flags);
       if(!db->m_open)
@@ -414,8 +415,6 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize blockchain storage");
 
     block_sync_size = command_line::get_arg(vm, command_line::arg_block_sync_size);
-    if (block_sync_size == 0)
-      block_sync_size = BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
 
     MGINFO("Loading checkpoints");
 
@@ -781,6 +780,16 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
+  size_t core::get_block_sync_size(uint64_t height) const
+  {
+    static const uint64_t quick_height = m_testnet ? 801219 : 1220516;
+    if (block_sync_size > 0)
+      return block_sync_size;
+    if (height >= quick_height)
+      return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
+    return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT_PRE_V4;
+  }
+  //-----------------------------------------------------------------------------------------------
   std::pair<uint64_t, uint64_t> core::get_coinbase_tx_sum(const uint64_t start_offset, const size_t count)
   {
     uint64_t emission_amount = 0;
@@ -1034,6 +1043,11 @@ namespace cryptonote
     m_miner.on_synchronized();
   }
   //-----------------------------------------------------------------------------------------------
+  void core::safesyncmode(const bool onoff)
+  {
+    m_blockchain_storage.safesyncmode(onoff);
+  }
+  //-----------------------------------------------------------------------------------------------
   bool core::add_new_block(const block& b, block_verification_context& bvc)
   {
     return m_blockchain_storage.add_new_block(b, bvc);
@@ -1101,6 +1115,11 @@ namespace cryptonote
   crypto::hash core::get_tail_id() const
   {
     return m_blockchain_storage.get_tail_id();
+  }
+  //-----------------------------------------------------------------------------------------------
+  difficulty_type core::get_block_cumulative_difficulty(uint64_t height) const
+  {
+    return m_blockchain_storage.get_db().get_block_cumulative_difficulty(height);
   }
   //-----------------------------------------------------------------------------------------------
   size_t core::get_pool_transactions_count() const
@@ -1230,6 +1249,16 @@ namespace cryptonote
         break;
     }
     return true;
+  }
+  //-----------------------------------------------------------------------------------------------
+  uint8_t core::get_ideal_hard_fork_version(uint64_t height) const
+  {
+    return get_blockchain_storage().get_ideal_hard_fork_version(height);
+  }
+  //-----------------------------------------------------------------------------------------------
+  uint8_t core::get_hard_fork_version(uint64_t height) const
+  {
+    return get_blockchain_storage().get_hard_fork_version(height);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::check_updates()

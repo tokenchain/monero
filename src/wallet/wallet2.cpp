@@ -1097,6 +1097,7 @@ void wallet2::process_outgoing(const crypto::hash &txid, const cryptonote::trans
   }
   entry.first->second.m_block_height = height;
   entry.first->second.m_timestamp = ts;
+  entry.first->second.m_unlock_time = tx.unlock_time;
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::process_new_blockchain_entry(const cryptonote::block& b, const cryptonote::block_complete_entry& bche, const crypto::hash& bl_id, uint64_t height, const cryptonote::COMMAND_RPC_GET_BLOCKS_FAST::block_output_indices &o_indices)
@@ -1878,6 +1879,10 @@ bool wallet2::clear()
   m_payments.clear();
   m_tx_keys.clear();
   m_confirmed_txs.clear();
+  m_unconfirmed_payments.clear();
+  m_scanned_pool_txs[0].clear();
+  m_scanned_pool_txs[1].clear();
+  m_address_book.clear();
   m_local_bc_height = 1;
   return true;
 }
@@ -1958,6 +1963,12 @@ bool wallet2::store_keys(const std::string& keys_file_name, const std::string& p
   value2.SetInt(m_merge_destinations ? 1 :0);
   json.AddMember("merge_destinations", value2, json.GetAllocator());
 
+  value2.SetInt(m_confirm_backlog ? 1 :0);
+  json.AddMember("confirm_backlog", value2, json.GetAllocator());
+
+  value2.SetInt(m_testnet ? 1 :0);
+  json.AddMember("testnet", value2, json.GetAllocator());
+
   // Serialize the JSON object
   rapidjson::StringBuffer buffer;
   rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
@@ -2029,6 +2040,7 @@ bool wallet2::load_keys(const std::string& keys_file_name, const std::string& pa
     m_min_output_count = 0;
     m_min_output_value = 0;
     m_merge_destinations = false;
+    m_confirm_backlog = true;
   }
   else
   {
@@ -2099,6 +2111,13 @@ bool wallet2::load_keys(const std::string& keys_file_name, const std::string& pa
     m_min_output_value = field_min_output_value;
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, merge_destinations, int, Int, false, false);
     m_merge_destinations = field_merge_destinations;
+    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, confirm_backlog, int, Int, false, true);
+    m_confirm_backlog = field_confirm_backlog;
+    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, testnet, int, Int, false, m_testnet);
+    // Wallet is being opened with testnet flag, but is saved as a mainnet wallet
+    THROW_WALLET_EXCEPTION_IF(m_testnet && !field_testnet, error::wallet_internal_error, "Mainnet wallet can not be opened as testnet wallet");
+    // Wallet is being opened without testnet flag but is saved as a testnet wallet.
+    THROW_WALLET_EXCEPTION_IF(!m_testnet && field_testnet, error::wallet_internal_error, "Testnet wallet can not be opened as mainnet wallet");
   }
 
   const cryptonote::account_keys& keys = m_account.get_keys();
@@ -2113,6 +2132,7 @@ bool wallet2::load_keys(const std::string& keys_file_name, const std::string& pa
 /*!
  * \brief verify password for default wallet keys file.
  * \param password       Password to verify
+ * \return               true if password is correct
  *
  * for verification only
  * should not mutate state, unlike load_keys()
@@ -2121,7 +2141,23 @@ bool wallet2::load_keys(const std::string& keys_file_name, const std::string& pa
  */
 bool wallet2::verify_password(const std::string& password) const
 {
-  const std::string keys_file_name = m_keys_file;
+  return verify_password(m_keys_file, password, m_watch_only);
+}
+
+/*!
+ * \brief verify password for specified wallet keys file.
+ * \param keys_file_name  Keys file to verify password for
+ * \param password        Password to verify
+ * \param watch_only      If set = only verify view keys, otherwise also spend keys
+ * \return                true if password is correct
+ *
+ * for verification only
+ * should not mutate state, unlike load_keys()
+ * can be used prior to rewriting wallet keys file, to ensure user has entered the correct password
+ *
+ */
+bool wallet2::verify_password(const std::string& keys_file_name, const std::string& password, bool watch_only)
+{
   wallet2::keys_file_data keys_file_data;
   std::string buf;
   bool r = epee::file_io_utils::load_file_to_string(keys_file_name, buf);
@@ -2154,7 +2190,7 @@ bool wallet2::verify_password(const std::string& password) const
   const cryptonote::account_keys& keys = account_data_check.get_keys();
 
   r = r && verify_keys(keys.m_view_secret_key,  keys.m_account_address.m_view_public_key);
-  if(!m_watch_only)
+  if(!watch_only)
     r = r && verify_keys(keys.m_spend_secret_key, keys.m_account_address.m_spend_public_key);
   return r;
 }
@@ -2192,9 +2228,26 @@ crypto::secret_key wallet2::generate(const std::string& wallet_, const std::stri
   // try asking the daemon first
   if(m_refresh_from_block_height == 0 && !recover){
     std::string err;
-    uint64_t height = get_daemon_blockchain_height(err);
-    if (err.empty())
-      m_refresh_from_block_height = height - blocks_per_month;
+    uint64_t height = 0;
+
+    // we get the max of approximated height and known height
+    // approximated height is the least of daemon target height
+    // (the max of what the other daemons are claiming is their
+    // height) and the theoretical height based on the local
+    // clock. This will be wrong only if both the local clock
+    // is bad *and* a peer daemon claims a highest height than
+    // the real chain.
+    // known height is the height the local daemon is currently
+    // synced to, it will be lower than the real chain height if
+    // the daemon is currently syncing.
+    height = get_approximate_blockchain_height();
+    uint64_t target_height = get_daemon_blockchain_target_height(err);
+    if (err.empty() && target_height < height)
+      height = target_height;
+    uint64_t local_height = get_daemon_blockchain_height(err);
+    if (err.empty() && local_height > height)
+      height = local_height;
+    m_refresh_from_block_height = height >= blocks_per_month ? height - blocks_per_month : 0;
   }
 
   if(m_refresh_from_block_height == 0 && !recover){
@@ -5683,6 +5736,67 @@ uint64_t wallet2::get_blockchain_height_by_date(uint16_t year, uint8_t month, ui
       return height_min;
     }
   }
+}
+//----------------------------------------------------------------------------------------------------
+bool wallet2::is_synced() const
+{
+  uint64_t height;
+  boost::optional<std::string> result = m_node_rpc_proxy.get_target_height(height);
+  if (result && *result != CORE_RPC_STATUS_OK)
+    return false;
+  return get_blockchain_current_height() >= height;
+}
+//----------------------------------------------------------------------------------------------------
+uint64_t wallet2::estimate_backlog(uint64_t blob_size, uint64_t fee)
+{
+  THROW_WALLET_EXCEPTION_IF(blob_size == 0, error::wallet_internal_error, "Invalid 0 fee");
+  THROW_WALLET_EXCEPTION_IF(fee == 0, error::wallet_internal_error, "Invalid 0 fee");
+
+  // get txpool backlog
+  epee::json_rpc::request<cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG::request> req = AUTO_VAL_INIT(req);
+  epee::json_rpc::response<cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG::response, std::string> res = AUTO_VAL_INIT(res);
+  m_daemon_rpc_mutex.lock();
+  req.jsonrpc = "2.0";
+  req.id = epee::serialization::storage_entry(0);
+  req.method = "get_txpool_backlog";
+  bool r = net_utils::invoke_http_json("/json_rpc", req, res, m_http_client, rpc_timeout);
+  m_daemon_rpc_mutex.unlock();
+  THROW_WALLET_EXCEPTION_IF(!r, error::no_connection_to_daemon, "Failed to connect to daemon");
+  THROW_WALLET_EXCEPTION_IF(res.result.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_txpool_backlog");
+  THROW_WALLET_EXCEPTION_IF(res.result.status != CORE_RPC_STATUS_OK, error::get_tx_pool_error);
+
+  epee::json_rpc::request<cryptonote::COMMAND_RPC_GET_INFO::request> req_t = AUTO_VAL_INIT(req_t);
+  epee::json_rpc::response<cryptonote::COMMAND_RPC_GET_INFO::response, std::string> resp_t = AUTO_VAL_INIT(resp_t);
+  m_daemon_rpc_mutex.lock();
+  req_t.jsonrpc = "2.0";
+  req_t.id = epee::serialization::storage_entry(0);
+  req_t.method = "get_info";
+  r = net_utils::invoke_http_json("/json_rpc", req_t, resp_t, m_http_client);
+  m_daemon_rpc_mutex.unlock();
+  THROW_WALLET_EXCEPTION_IF(!r, error::no_connection_to_daemon, "get_info");
+  THROW_WALLET_EXCEPTION_IF(resp_t.result.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_info");
+  THROW_WALLET_EXCEPTION_IF(resp_t.result.status != CORE_RPC_STATUS_OK, error::get_tx_pool_error);
+
+  double our_fee_byte = fee / (double)blob_size;
+  uint64_t priority_size = 0;
+  for (const auto &i: res.result.backlog)
+  {
+    if (i.blob_size == 0)
+    {
+      MWARNING("Got 0 sized blob from txpool, ignored");
+      continue;
+    }
+    double this_fee_byte = i.fee / (double)i.blob_size;
+    if (this_fee_byte < our_fee_byte)
+      continue;
+    priority_size += i.blob_size;
+  }
+
+  uint64_t full_reward_zone = resp_t.result.block_size_limit / 2;
+  uint64_t nblocks = (priority_size + full_reward_zone - 1) / full_reward_zone;
+  MDEBUG("estimate_backlog: priority_size " << priority_size << " for " << our_fee_byte << " (" << our_fee_byte << " piconero fee/byte), "
+      << nblocks << " blocks at block size " << full_reward_zone);
+  return nblocks;
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::generate_genesis(cryptonote::block& b) {
