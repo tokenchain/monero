@@ -40,7 +40,8 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "storages/portable_storage_template_helper.h"
 #include "common/download.h"
-#include "common/thread_group.h"
+#include "common/threadpool.h"
+#include "common/command_line.h"
 #include "tx_pool.h"
 #include "blockchain.h"
 #include "cryptonote_basic/miner.h"
@@ -57,6 +58,10 @@ namespace cryptonote
    struct test_options {
      const std::pair<uint8_t, uint64_t> *hard_forks;
    };
+
+  extern const command_line::arg_descriptor<std::string> arg_data_dir;
+  extern const command_line::arg_descriptor<std::string> arg_testnet_data_dir;
+  extern const command_line::arg_descriptor<bool, false> arg_testnet_on;
 
   /************************************************************************/
   /*                                                                      */
@@ -299,10 +304,8 @@ namespace cryptonote
       *
       * @param height return-by-reference height of the block
       * @param top_id return-by-reference hash of the block
-      *
-      * @return true
       */
-     bool get_blockchain_top(uint64_t& height, crypto::hash& top_id) const;
+     void get_blockchain_top(uint64_t& height, crypto::hash& top_id) const;
 
      /**
       * @copydoc Blockchain::get_blocks(uint64_t, size_t, std::list<std::pair<cryptonote::blobdata,block>>&, std::list<transaction>&) const
@@ -422,11 +425,12 @@ namespace cryptonote
 
      /**
       * @copydoc tx_memory_pool::get_transactions
+      * @param include_unrelayed_txes include unrelayed txes in result
       *
       * @note see tx_memory_pool::get_transactions
       */
-     bool get_pool_transactions(std::list<transaction>& txs) const;
-     
+     bool get_pool_transactions(std::list<transaction>& txs, bool include_unrelayed_txes = true) const;
+
      /**
       * @copydoc tx_memory_pool::get_txpool_backlog
       *
@@ -436,17 +440,19 @@ namespace cryptonote
      
      /**
       * @copydoc tx_memory_pool::get_transactions
+      * @param include_unrelayed_txes include unrelayed txes in result
       *
       * @note see tx_memory_pool::get_transactions
       */
-     bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs) const;
+     bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const;
 
      /**
       * @copydoc tx_memory_pool::get_transactions
+      * @param include_unrelayed_txes include unrelayed txes in result
       *
       * @note see tx_memory_pool::get_transactions
       */
-     bool get_pool_transaction_stats(struct txpool_stats& stats) const;
+     bool get_pool_transaction_stats(struct txpool_stats& stats, bool include_unrelayed_txes = true) const;
 
      /**
       * @copydoc tx_memory_pool::get_transaction
@@ -457,10 +463,18 @@ namespace cryptonote
 
      /**
       * @copydoc tx_memory_pool::get_pool_transactions_and_spent_keys_info
+      * @param include_unrelayed_txes include unrelayed txes in result
       *
       * @note see tx_memory_pool::get_pool_transactions_and_spent_keys_info
       */
-     bool get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos) const;
+     bool get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos, bool include_unrelayed_txes = true) const;
+
+     /**
+      * @copydoc tx_memory_pool::get_pool_for_rpc
+      *
+      * @note see tx_memory_pool::get_pool_for_rpc
+      */
+     bool get_pool_for_rpc(std::vector<cryptonote::rpc::tx_in_pool>& tx_infos, cryptonote::rpc::key_images_with_tx_hashes& key_image_infos) const;
 
      /**
       * @copydoc tx_memory_pool::get_transactions_count
@@ -708,6 +722,16 @@ namespace cryptonote
      bool are_key_images_spent(const std::vector<crypto::key_image>& key_im, std::vector<bool> &spent) const;
 
      /**
+      * @brief check if multiple key images are spent in the transaction pool
+      *
+      * @param key_im list of key images to check
+      * @param spent return-by-reference result for each image checked
+      *
+      * @return true
+      */
+     bool are_key_images_spent_in_pool(const std::vector<crypto::key_image>& key_im, std::vector<bool> &spent) const;
+
+     /**
       * @brief get the number of blocks to sync in one go
       *
       * @return the number of blocks to sync in one go
@@ -727,6 +751,20 @@ namespace cryptonote
       * @return are we on testnet?
       */     
      bool get_testnet() const { return m_testnet; };
+
+     /**
+      * @brief get whether fluffy blocks are enabled
+      *
+      * @return whether fluffy blocks are enabled
+      */
+     bool fluffy_blocks_enabled() const { return m_fluffy_blocks_enabled; }
+
+     /**
+      * @brief check a set of hashes against the precompiled hash set
+      *
+      * @return number of usable blocks
+      */
+     uint64_t prevalidate_block_hashes(uint64_t height, const std::list<crypto::hash> &hashes);
 
    private:
 
@@ -933,7 +971,7 @@ namespace cryptonote
      std::unordered_set<crypto::hash> bad_semantics_txes[2];
      boost::mutex bad_semantics_txes_lock;
 
-     tools::thread_group m_threadpool;
+     tools::threadpool& m_threadpool;
 
      enum {
        UPDATES_DISABLED,
@@ -945,6 +983,8 @@ namespace cryptonote
      tools::download_async_handle m_update_download;
      size_t m_last_update_length;
      boost::mutex m_update_mutex;
+
+     bool m_fluffy_blocks_enabled;
    };
 }
 

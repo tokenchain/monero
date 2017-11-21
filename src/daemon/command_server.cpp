@@ -91,7 +91,7 @@ t_command_server::t_command_server(
   m_command_lookup.set_handler(
       "print_tx"
     , std::bind(&t_command_parser_executor::print_transaction, &m_parser, p::_1)
-    , "Print transaction, print_tx <transaction_hash>"
+    , "Print transaction, print_tx <transaction_hash> [+hex] [+json]"
     );
   m_command_lookup.set_handler(
       "is_key_image_spent"
@@ -141,7 +141,7 @@ t_command_server::t_command_server(
   m_command_lookup.set_handler(
       "set_log"
     , std::bind(&t_command_parser_executor::set_log_level, &m_parser, p::_1)
-    , "set_log <level>|<categories> - Change current loglevel, <level> is a number 0-4"
+    , "set_log <level>|<{+,-,}categories> - Change current log level/categories, <level> is a number 0-4"
     );
   m_command_lookup.set_handler(
       "diff"
@@ -231,7 +231,7 @@ t_command_server::t_command_server(
     m_command_lookup.set_handler(
       "print_coinbase_tx_sum"
     , std::bind(&t_command_parser_executor::print_coinbase_tx_sum, &m_parser, p::_1)
-    , "Print sum of coinbase transactions (start height, block count)"
+    , "Print sum of coinbase transactions <start height> [block count]"
     );
     m_command_lookup.set_handler(
       "alt_chain_info"
@@ -241,7 +241,7 @@ t_command_server::t_command_server(
     m_command_lookup.set_handler(
       "bc_dyn_stats"
     , std::bind(&t_command_parser_executor::print_blockchain_dynamic_stats, &m_parser, p::_1)
-    , "Print information about current blockchain dynamic state"
+    , "Print information about current blockchain dynamic state, bc_dyn_stats <last n blocks>"
     );
     m_command_lookup.set_handler(
       "update"

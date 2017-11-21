@@ -61,7 +61,7 @@ int main(int argc, char const * argv[])
 
     // TODO parse the debug options like set log level right here at start
 
-    tools::sanitize_locale();
+    tools::on_startup();
 
     epee::string_tools::set_module_name_and_folder(argv[0]);
 
@@ -82,13 +82,16 @@ int main(int argc, char const * argv[])
       command_line::add_arg(visible_options, daemon_args::arg_os_version);
       bf::path default_conf = default_data_dir / std::string(CRYPTONOTE_NAME ".conf");
       command_line::add_arg(visible_options, daemon_args::arg_config_file, default_conf.string());
-      command_line::add_arg(visible_options, command_line::arg_test_dbg_lock_sleep);
 
       // Settings
       bf::path default_log = default_data_dir / std::string(CRYPTONOTE_NAME ".log");
       command_line::add_arg(core_settings, daemon_args::arg_log_file, default_log.string());
       command_line::add_arg(core_settings, daemon_args::arg_log_level);
+      command_line::add_arg(core_settings, daemon_args::arg_max_log_file_size);
       command_line::add_arg(core_settings, daemon_args::arg_max_concurrency);
+      command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_bind_ip);
+      command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_bind_port);
+      command_line::add_arg(core_settings, daemon_args::arg_zmq_testnet_rpc_bind_port);
 
       daemonizer::init_options(hidden_options, visible_options);
       daemonize::t_executor::init_options(core_settings);
@@ -140,9 +143,7 @@ int main(int argc, char const * argv[])
       return 0;
     }
 
-    epee::debug::g_test_dbg_lock_sleep() = command_line::get_arg(vm, command_line::arg_test_dbg_lock_sleep);
-
-    std::string db_type = command_line::get_arg(vm, command_line::arg_db_type);
+    std::string db_type = command_line::get_arg(vm, cryptonote::arg_db_type);
 
     // verify that blockchaindb type is valid
     if(!cryptonote::blockchain_valid_db_type(db_type))
@@ -152,9 +153,9 @@ int main(int argc, char const * argv[])
       return 0;
     }
 
-    bool testnet_mode = command_line::get_arg(vm, command_line::arg_testnet_on);
+    bool testnet_mode = command_line::get_arg(vm, cryptonote::arg_testnet_on);
 
-    auto data_dir_arg = testnet_mode ? command_line::arg_testnet_data_dir : command_line::arg_data_dir;
+    auto data_dir_arg = testnet_mode ? cryptonote::arg_testnet_data_dir : cryptonote::arg_data_dir;
 
     // data_dir
     //   default: e.g. ~/.bitmonero/ or ~/.bitmonero/testnet
@@ -201,13 +202,13 @@ int main(int argc, char const * argv[])
     //     absolute path
     //     relative path: relative to data_dir
     bf::path log_file_path {data_dir / std::string(CRYPTONOTE_NAME ".log")};
-    if (! vm["log-file"].defaulted())
+    if (!command_line::is_arg_defaulted(vm, daemon_args::arg_log_file))
       log_file_path = command_line::get_arg(vm, daemon_args::arg_log_file);
     log_file_path = bf::absolute(log_file_path, relative_path_base);
-    mlog_configure(log_file_path.string(), true);
+    mlog_configure(log_file_path.string(), true, command_line::get_arg(vm, daemon_args::arg_max_log_file_size));
 
     // Set log level
-    if (!vm["log-level"].defaulted())
+    if (!command_line::is_arg_defaulted(vm, daemon_args::arg_log_level))
     {
       mlog_set_log(command_line::get_arg(vm, daemon_args::arg_log_level).c_str());
     }
@@ -246,7 +247,12 @@ int main(int argc, char const * argv[])
         if (command_line::has_arg(vm, arg.rpc_login))
         {
           login = tools::login::parse(
-            command_line::get_arg(vm, arg.rpc_login), false, "Daemon client password"
+            command_line::get_arg(vm, arg.rpc_login), false, [](bool verify) {
+#ifdef HAVE_READLINE
+        rdln::suspend_readline pause_readline;
+#endif
+              return tools::password_container::prompt(verify, "Daemon client password");
+            }
           );
           if (!login)
           {

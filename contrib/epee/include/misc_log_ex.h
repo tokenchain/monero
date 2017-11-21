@@ -52,6 +52,7 @@
 #include "easylogging++.h"
 
 #define MONERO_DEFAULT_LOG_CATEGORY "default"
+#define MAX_LOG_FILE_SIZE 104850000 // 100 MB - 7600 bytes
 
 #define MCFATAL(cat,x) CLOG(FATAL,cat) << x
 #define MCERROR(cat,x) CLOG(ERROR,cat) << x
@@ -104,9 +105,9 @@
 #define _dbg2(x) MDEBUG(x)
 #define _dbg1(x) MDEBUG(x)
 #define _info(x) MINFO(x)
-#define _note(x) MINFO(x)
-#define _fact(x) MINFO(x)
-#define _mark(x) MINFO(x)
+#define _note(x) MDEBUG(x)
+#define _fact(x) MDEBUG(x)
+#define _mark(x) MDEBUG(x)
 #define _warn(x) MWARNING(x)
 #define _erro(x) MERROR(x)
 
@@ -123,8 +124,9 @@
 #endif
 
 std::string mlog_get_default_log_path(const char *default_filename);
-void mlog_configure(const std::string &filename_base, bool console);
+void mlog_configure(const std::string &filename_base, bool console, const std::size_t max_log_file_size = MAX_LOG_FILE_SIZE);
 void mlog_set_categories(const char *categories);
+std::string mlog_get_categories();
 void mlog_set_log_level(int level);
 void mlog_set_log(const char *log);
 

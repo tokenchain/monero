@@ -48,6 +48,7 @@
 #include "net/local_ip.h"
 #include "crypto/crypto.h"
 #include "storages/levin_abstract_invoke2.h"
+#include "cryptonote_core/cryptonote_core.h"
 
 // We have to look for miniupnpc headers in different places, dependent on if its compiled or external
 #ifdef UPNP_STATIC
@@ -390,7 +391,7 @@ namespace nodetool
       ip::tcp::endpoint endpoint = *i;
       if (endpoint.address().is_v4())
       {
-        epee::net_utils::network_address na(new epee::net_utils::ipv4_network_address(boost::asio::detail::socket_ops::host_to_network_long(endpoint.address().to_v4().to_ulong()), endpoint.port()));
+        epee::net_utils::network_address na{epee::net_utils::ipv4_network_address{boost::asio::detail::socket_ops::host_to_network_long(endpoint.address().to_v4().to_ulong()), endpoint.port()}};
         seed_nodes.push_back(na);
         MINFO("Added seed node: " << na.str());
       }
@@ -434,7 +435,7 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::init(const boost::program_options::variables_map& vm)
   {
     std::set<std::string> full_addrs;
-    m_testnet = command_line::get_arg(vm, command_line::arg_testnet_on);
+    m_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
 
     if (m_testnet)
     {
@@ -535,7 +536,7 @@ namespace nodetool
     bool res = handle_command_line(vm);
     CHECK_AND_ASSERT_MES(res, false, "Failed to handle command line");
 
-    auto config_arg = m_testnet ? command_line::arg_testnet_data_dir : command_line::arg_data_dir;
+    auto config_arg = m_testnet ? cryptonote::arg_testnet_data_dir : cryptonote::arg_data_dir;
     m_config_folder = command_line::get_arg(vm, config_arg);
 
     if ((!m_testnet && m_port != std::to_string(::config::P2P_DEFAULT_PORT))
@@ -560,7 +561,7 @@ namespace nodetool
 
     //configure self
     m_net_server.set_threads_prefix("P2P");
-    m_net_server.get_config_object().m_pcommands_handler = this;
+    m_net_server.get_config_object().set_handler(this);
     m_net_server.get_config_object().m_invoke_timeout = P2P_DEFAULT_INVOKE_TIMEOUT;
     m_net_server.set_connection_filter(this);
 
@@ -573,55 +574,15 @@ namespace nodetool
     res = m_net_server.init_server(m_port, m_bind_ip);
     CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
 
-    m_listenning_port = m_net_server.get_binded_port();
-    MLOG_GREEN(el::Level::Info, "Net service bound to " << m_bind_ip << ":" << m_listenning_port);
+    m_listening_port = m_net_server.get_binded_port();
+    MLOG_GREEN(el::Level::Info, "Net service bound to " << m_bind_ip << ":" << m_listening_port);
     if(m_external_port)
       MDEBUG("External port defined as " << m_external_port);
 
-    // Add UPnP port mapping
-    if(m_no_igd == false) {
-      MDEBUG("Attempting to add IGD port mapping.");
-      int result;
-#if MINIUPNPC_API_VERSION > 13
-      // default according to miniupnpc.h
-      unsigned char ttl = 2;
-      UPNPDev* deviceList = upnpDiscover(1000, NULL, NULL, 0, 0, ttl, &result);
-#else
-      UPNPDev* deviceList = upnpDiscover(1000, NULL, NULL, 0, 0, &result);
-#endif
-      UPNPUrls urls;
-      IGDdatas igdData;
-      char lanAddress[64];
-      result = UPNP_GetValidIGD(deviceList, &urls, &igdData, lanAddress, sizeof lanAddress);
-      freeUPNPDevlist(deviceList);
-      if (result != 0) {
-        if (result == 1) {
-          std::ostringstream portString;
-          portString << m_listenning_port;
+    // add UPnP port mapping
+    if(!m_no_igd)
+      add_upnp_port_mapping(m_listening_port);
 
-          // Delete the port mapping before we create it, just in case we have dangling port mapping from the daemon not being shut down correctly
-          UPNP_DeletePortMapping(urls.controlURL, igdData.first.servicetype, portString.str().c_str(), "TCP", 0);
-
-          int portMappingResult;
-          portMappingResult = UPNP_AddPortMapping(urls.controlURL, igdData.first.servicetype, portString.str().c_str(), portString.str().c_str(), lanAddress, CRYPTONOTE_NAME, "TCP", 0, "0");
-          if (portMappingResult != 0) {
-            LOG_ERROR("UPNP_AddPortMapping failed, error: " << strupnperror(portMappingResult));
-          } else {
-            MLOG_GREEN(el::Level::Info, "Added IGD port mapping.");
-          }
-        } else if (result == 2) {
-          MWARNING("IGD was found but reported as not connected.");
-        } else if (result == 3) {
-          MWARNING("UPnP device was found but not recognized as IGD.");
-        } else {
-          MWARNING("UPNP_GetValidIGD returned an unknown result code.");
-        }
-
-        FreeUPNPUrls(&urls);
-      } else {
-        MINFO("No IGD was found.");
-      }
-    }
     return res;
   }
   //-----------------------------------------------------------------------------------
@@ -688,6 +649,9 @@ namespace nodetool
     kill();
     m_peerlist.deinit();
     m_net_server.deinit_server();
+    // remove UPnP port mapping
+    if(!m_no_igd)
+      delete_upnp_port_mapping(m_listening_port);
     return store_config();
   }
   //-----------------------------------------------------------------------------------
@@ -1127,6 +1091,8 @@ namespace nodetool
 
       if (use_white_list) {
         local_peers_count = m_peerlist.get_white_peers_count();
+        if (!local_peers_count)
+          return false;
         max_random_index = std::min<uint64_t>(local_peers_count -1, 20);
         random_index = get_random_index_with_fixed_probability(max_random_index);
       } else {
@@ -1389,7 +1355,7 @@ namespace nodetool
     node_data.local_time = local_time;
     node_data.peer_id = m_config.m_peer_id;
     if(!m_hide_my_port)
-      node_data.my_port = m_external_port ? m_external_port : m_listenning_port;
+      node_data.my_port = m_external_port ? m_external_port : m_listening_port;
     else
       node_data.my_port = 0;
     node_data.network_id = m_network_id;
@@ -1556,7 +1522,7 @@ namespace nodetool
       return false;
     std::string ip = epee::string_tools::get_ip_string_from_int32(actual_ip);
     std::string port = epee::string_tools::num_to_string_fast(node_data.my_port);
-    epee::net_utils::network_address address(new epee::net_utils::ipv4_network_address(actual_ip, node_data.my_port));
+    epee::net_utils::network_address address{epee::net_utils::ipv4_network_address(actual_ip, node_data.my_port)};
     peerid_type pr = node_data.peer_id;
     bool r = m_net_server.connect_async(ip, port, m_config.m_net_config.ping_connection_timeout, [cb, /*context,*/ address, pr, this](
       const typename net_server::t_connection_context& ping_context,
@@ -1704,7 +1670,7 @@ namespace nodetool
     if(arg.node_data.peer_id != m_config.m_peer_id && arg.node_data.my_port)
     {
       peerid_type peer_id_l = arg.node_data.peer_id;
-      uint32_t port_l = arg.node_data.my_port;      
+      uint32_t port_l = arg.node_data.my_port;
       //try ping to be sure that we can add this peer to peer_list
       try_ping(arg.node_data, context, [peer_id_l, port_l, context, this]()
       {
@@ -1713,7 +1679,7 @@ namespace nodetool
         //called only(!) if success pinged, update local peerlist
         peerlist_entry pe;
         const epee::net_utils::network_address na = context.m_remote_address;
-        pe.adr.reset(new epee::net_utils::ipv4_network_address(na.as<epee::net_utils::ipv4_network_address>().ip(), port_l));
+        pe.adr = epee::net_utils::ipv4_network_address(na.as<epee::net_utils::ipv4_network_address>().ip(), port_l);
         time_t last_seen;
         time(&last_seen);
         pe.last_seen = static_cast<int64_t>(last_seen);
@@ -1951,7 +1917,12 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::gray_peerlist_housekeeping()
   {
+    if (!m_exclusive_peers.empty()) return true;
+
     peerlist_entry pe = AUTO_VAL_INIT(pe);
+
+    if (m_net_server.is_stop_signal_sent())
+      return false;
 
     if (!m_peerlist.get_random_gray_peer(pe)) {
         return false;
@@ -1972,5 +1943,94 @@ namespace nodetool
     LOG_PRINT_L2("PEER PROMOTED TO WHITE PEER LIST IP address: " << pe.adr.host_str() << " Peer ID: " << peerid_type(pe.id));
 
     return true;
+  }
+
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::add_upnp_port_mapping(uint32_t port)
+  {
+    MDEBUG("Attempting to add IGD port mapping.");
+    int result;
+#if MINIUPNPC_API_VERSION > 13
+    // default according to miniupnpc.h
+    unsigned char ttl = 2;
+    UPNPDev* deviceList = upnpDiscover(1000, NULL, NULL, 0, 0, ttl, &result);
+#else
+    UPNPDev* deviceList = upnpDiscover(1000, NULL, NULL, 0, 0, &result);
+#endif
+    UPNPUrls urls;
+    IGDdatas igdData;
+    char lanAddress[64];
+    result = UPNP_GetValidIGD(deviceList, &urls, &igdData, lanAddress, sizeof lanAddress);
+    freeUPNPDevlist(deviceList);
+    if (result != 0) {
+      if (result == 1) {
+        std::ostringstream portString;
+        portString << port;
+
+        // Delete the port mapping before we create it, just in case we have dangling port mapping from the daemon not being shut down correctly
+        UPNP_DeletePortMapping(urls.controlURL, igdData.first.servicetype, portString.str().c_str(), "TCP", 0);
+
+        int portMappingResult;
+        portMappingResult = UPNP_AddPortMapping(urls.controlURL, igdData.first.servicetype, portString.str().c_str(), portString.str().c_str(), lanAddress, CRYPTONOTE_NAME, "TCP", 0, "0");
+        if (portMappingResult != 0) {
+          LOG_ERROR("UPNP_AddPortMapping failed, error: " << strupnperror(portMappingResult));
+        } else {
+          MLOG_GREEN(el::Level::Info, "Added IGD port mapping.");
+        }
+      } else if (result == 2) {
+        MWARNING("IGD was found but reported as not connected.");
+      } else if (result == 3) {
+        MWARNING("UPnP device was found but not recognized as IGD.");
+      } else {
+        MWARNING("UPNP_GetValidIGD returned an unknown result code.");
+      }
+
+      FreeUPNPUrls(&urls);
+    } else {
+      MINFO("No IGD was found.");
+    }
+  }
+
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::delete_upnp_port_mapping(uint32_t port)
+  {
+    MDEBUG("Attempting to delete IGD port mapping.");
+    int result;
+#if MINIUPNPC_API_VERSION > 13
+    // default according to miniupnpc.h
+    unsigned char ttl = 2;
+    UPNPDev* deviceList = upnpDiscover(1000, NULL, NULL, 0, 0, ttl, &result);
+#else
+    UPNPDev* deviceList = upnpDiscover(1000, NULL, NULL, 0, 0, &result);
+#endif
+    UPNPUrls urls;
+    IGDdatas igdData;
+    char lanAddress[64];
+    result = UPNP_GetValidIGD(deviceList, &urls, &igdData, lanAddress, sizeof lanAddress);
+    freeUPNPDevlist(deviceList);
+    if (result != 0) {
+      if (result == 1) {
+        std::ostringstream portString;
+        portString << port;
+
+        int portMappingResult;
+        portMappingResult = UPNP_DeletePortMapping(urls.controlURL, igdData.first.servicetype, portString.str().c_str(), "TCP", 0);
+        if (portMappingResult != 0) {
+          LOG_ERROR("UPNP_DeletePortMapping failed, error: " << strupnperror(portMappingResult));
+        } else {
+          MLOG_GREEN(el::Level::Info, "Deleted IGD port mapping.");
+        }
+      } else if (result == 2) {
+        MWARNING("IGD was found but reported as not connected.");
+      } else if (result == 3) {
+        MWARNING("UPnP device was found but not recognized as IGD.");
+      } else {
+        MWARNING("UPNP_GetValidIGD returned an unknown result code.");
+      }
+
+      FreeUPNPUrls(&urls);
+    } else {
+      MINFO("No IGD was found.");
+    }
   }
 }

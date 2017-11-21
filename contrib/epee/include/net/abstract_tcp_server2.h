@@ -213,6 +213,12 @@ namespace net_utils
 
     int get_binded_port(){return m_port;}
 
+    long get_connections_count() const
+    {
+      auto connections_count = (m_sock_count > 0) ? (m_sock_count - 1) : 0; // Socket count minus listening socket
+      return connections_count;
+    }
+
     boost::asio::io_service& get_io_service(){return io_service_;}
 
     struct idle_callback_conext_base
@@ -281,8 +287,6 @@ namespace net_utils
 
     bool is_thread_worker();
 
-    bool cleanup_connections();
-
     /// The io_service used to perform asynchronous operations.
     std::unique_ptr<boost::asio::io_service> m_io_service_local_instance;
     boost::asio::io_service& io_service_;    
@@ -309,7 +313,7 @@ namespace net_utils
     connection_ptr new_connection_;
 
     boost::mutex connections_mutex;
-    std::deque<std::pair<boost::system_time, connection_ptr>> connections_;
+    std::set<connection_ptr> connections_;
 
   }; // class <>boosted_tcp_server
 

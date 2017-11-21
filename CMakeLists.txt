@@ -147,6 +147,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 enable_testing()
 
 option(BUILD_DOCUMENTATION "Build the Doxygen documentation." ON)
+option(BUILD_TESTS "Build tests." OFF)
 
 # Check whether we're on a 32-bit or 64-bit system
 if(CMAKE_SIZEOF_VOID_P EQUAL "8")
@@ -186,7 +187,7 @@ endif()
 # elseif(CMAKE_SYSTEM_NAME MATCHES ".*BSDI.*")
 #   set(BSDI TRUE)
 
-include_directories(external/easylogging++ src contrib/epee/include external "${CMAKE_BINARY_DIR}/version")
+include_directories(external/easylogging++ src contrib/epee/include external)
 
 if(APPLE)
   include_directories(SYSTEM /usr/include/malloc)
@@ -234,6 +235,7 @@ if(STATIC)
   else()
     set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
   endif()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DZMQ_STATIC")
 endif()
 
 # Set default blockchain storage location:
@@ -292,11 +294,13 @@ add_definitions("-DBLOCKCHAIN_DB=${BLOCKCHAIN_DB}")
 
 # Can't install hook in static build on OSX, because OSX linker does not support --wrap
 # On ARM, having libunwind package (with .so's only) installed breaks static link.
+# When possible, avoid stack tracing using libunwind in favor of using easylogging++.
 if (APPLE)
   set(DEFAULT_STACK_TRACE OFF)
   set(LIBUNWIND_LIBRARIES "")
 elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND NOT MINGW)
   set(DEFAULT_STACK_TRACE ON)
+  set(STACK_TRACE_LIB "easylogging++") # for diag output only
   set(LIBUNWIND_LIBRARIES "")
 elseif (ARM AND STATIC)
   set(DEFAULT_STACK_TRACE OFF)
@@ -305,6 +309,7 @@ else()
   find_package(Libunwind)
   if(LIBUNWIND_FOUND)
     set(DEFAULT_STACK_TRACE ON)
+    set(STACK_TRACE_LIB "libunwind") # for diag output only
   else()
     set(DEFAULT_STACK_TRACE OFF)
     set(LIBUNWIND_LIBRARIES "")
@@ -314,12 +319,22 @@ endif()
 option(STACK_TRACE "Install a hook that dumps stack on exception" ${DEFAULT_STACK_TRACE})
 
 if(STACK_TRACE)
-  message(STATUS "Stack trace on exception enabled")
+  message(STATUS "Stack trace on exception enabled (using ${STACK_TRACE_LIB})")
 else()
   message(STATUS "Stack trace on exception disabled")
 endif()
 
-# Handle OpenSSL, used for sha256sum on binary updates
+if (UNIX AND NOT APPLE)
+  # Note that at the time of this writing the -Wstrict-prototypes flag added below will make this fail
+  set(THREADS_PREFER_PTHREAD_FLAG ON)
+  find_package(Threads)
+endif()
+
+# Handle OpenSSL, used for sha256sum on binary updates and light wallet ssl http
+if (CMAKE_SYSTEM_NAME MATCHES "(SunOS|Solaris)")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthreads")
+endif ()
+
 if (APPLE AND NOT IOS)
   if (NOT OpenSSL_DIR)
       EXECUTE_PROCESS(COMMAND brew --prefix openssl
@@ -330,16 +345,12 @@ if (APPLE AND NOT IOS)
 endif()
 
 find_package(OpenSSL REQUIRED)
+message(STATUS "Using OpenSSL include dir at ${OPENSSL_INCLUDE_DIR}")
+include_directories(${OPENSSL_INCLUDE_DIR})
 if(STATIC AND NOT IOS)
   if(UNIX)
-    set(OPENSSL_LIBRARIES "${OPENSSL_LIBRARIES};${CMAKE_DL_LIBS}")
+    set(OPENSSL_LIBRARIES "${OPENSSL_LIBRARIES};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
   endif()
-endif()
-
-if (UNIX AND NOT APPLE)
-  # Note that at the time of this writing the -Wstrict-prototypes flag added below will make this fail
-  set(THREADS_PREFER_PTHREAD_FLAG ON)
-  find_package(Threads)
 endif()
 
 add_definitions(-DAUTO_INITIALIZE_EASYLOGGINGPP)
@@ -407,7 +418,7 @@ else()
       set(WARNINGS "${WARNINGS} -Wno-error=inline-asm")
     endif()
   else()
-    set(WARNINGS "${WARNINGS} -Wlogical-op -Wno-error=maybe-uninitialized")
+    set(WARNINGS "${WARNINGS} -Wlogical-op -Wno-error=maybe-uninitialized -Wno-error=cpp")
   endif()
   if(MINGW)
     set(WARNINGS "${WARNINGS} -Wno-error=unused-value -Wno-error=unused-but-set-variable")
@@ -451,7 +462,11 @@ else()
 
   option(NO_AES "Explicitly disable AES support" ${NO_AES})
 
-  if(NOT NO_AES AND NOT ARM AND NOT PPC64LE)
+  if(NO_AES)
+    message(STATUS "AES support explicitly disabled")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DNO_AES")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNO_AES")
+  elseif(NOT ARM AND NOT PPC64LE)
     message(STATUS "AES support enabled")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maes")
@@ -647,6 +662,11 @@ if(NOT Boost_FOUND)
   die("Could not find Boost libraries, please make sure you have installed Boost or libboost-all-dev (1.58) or the equivalent")
 elseif(Boost_FOUND)
   message(STATUS "Found Boost Version: ${Boost_VERSION}")
+  if (Boost_VERSION VERSION_LESS 1.62 AND NOT (OPENSSL_VERSION VERSION_LESS 1.1))
+      message(FATAL_ERROR "Boost older than 1.62 is too old to link with OpenSSL 1.1 or newer. "
+                          "Update Boost or install OpenSSL 1.0 and set path to it when running cmake: "
+                          "cmake -DOPENSSL_ROOT_DIR='/usr/include/openssl-1.0;/usr/lib/openssl-1.0'")
+  endif()
 endif()
 
 include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
@@ -659,6 +679,8 @@ elseif(FREEBSD)
 elseif(DRAGONFLY)
   find_library(COMPAT compat)
   set(EXTRA_LIBRARIES execinfo ${COMPAT})
+elseif(CMAKE_SYSTEM_NAME MATCHES "(SunOS|Solaris)")
+  set(EXTRA_LIBRARIES socket nsl resolv)
 elseif(NOT MSVC)
   find_library(RT rt)
   set(EXTRA_LIBRARIES ${RT})
@@ -672,8 +694,8 @@ if(USE_READLINE)
   if(READLINE_FOUND AND GNU_READLINE_FOUND)
     add_definitions(-DHAVE_READLINE)
     include_directories(${Readline_INCLUDE_DIR})
-    list(APPEND EXTRA_LIBRARIES ${Readline_LIBRARY})
     message(STATUS "Found readline library at: ${Readline_ROOT_DIR}")
+    set(EPEE_READLINE epee_readline)
   else()
     message(STATUS "Could not find GNU readline library so building without readline support")
   endif()
@@ -687,27 +709,34 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND ARCH_WIDTH EQUAL "32" AND NOT IOS)
   list(APPEND EXTRA_LIBRARIES ${ATOMIC})
 endif()
 
-include(version.cmake)
+find_path(ZMQ_INCLUDE_PATH zmq.hpp)
+find_library(ZMQ_LIB zmq)
+find_library(PGM_LIBRARY pgm)
+find_library(NORM_LIBRARY norm)
+find_library(SODIUM_LIBRARY sodium)
 
-function (treat_warnings_as_errors dirs)
-  foreach(dir ${ARGV})
-    set_property(DIRECTORY ${dir}
-      APPEND PROPERTY COMPILE_FLAGS "-Werror")
-  endforeach()
-endfunction()
+if(NOT ZMQ_INCLUDE_PATH)
+  message(FATAL_ERROR "Could not find required header zmq.hpp")
+endif()
+if(NOT ZMQ_LIB)
+  message(FATAL_ERROR "Could not find required libzmq")
+endif()
+if(PGM_LIBRARY)
+  set(ZMQ_LIB "${ZMQ_LIB};${PGM_LIBRARY}")
+endif()
+if(NORM_LIBRARY)
+  set(ZMQ_LIB "${ZMQ_LIB};${NORM_LIBRARY}")
+endif()
+if(SODIUM_LIBRARY)
+  set(ZMQ_LIB "${ZMQ_LIB};${SODIUM_LIBRARY}")
+endif()
 
 add_subdirectory(contrib)
 add_subdirectory(src)
 
-treat_warnings_as_errors(contrib src)
-
-option(BUILD_TESTS "Build tests." OFF)
-
 if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
-
-
 
 if(BUILD_DOCUMENTATION)
   set(DOC_GRAPHS "YES" CACHE STRING "Create dependency graphs (needs graphviz)")

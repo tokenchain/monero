@@ -53,7 +53,7 @@ public:
   virtual std::string get_db_name() const { return std::string(); }
   virtual bool lock() { return true; }
   virtual void unlock() { }
-  virtual bool batch_start(uint64_t batch_num_blocks=0) { return true; }
+  virtual bool batch_start(uint64_t batch_num_blocks=0, uint64_t batch_bytes=0) { return true; }
   virtual void batch_stop() {}
   virtual void set_batch_transactions(bool) {}
   virtual void block_txn_start(bool readonly=false) {}
@@ -115,13 +115,13 @@ public:
 
   virtual void add_txpool_tx(const transaction &tx, const txpool_tx_meta_t& details) {}
   virtual void update_txpool_tx(const crypto::hash &txid, const txpool_tx_meta_t& details) {}
-  virtual uint64_t get_txpool_tx_count() const { return 0; }
+  virtual uint64_t get_txpool_tx_count(bool include_unrelayed_txes = true) const { return 0; }
   virtual bool txpool_has_tx(const crypto::hash &txid) const { return false; }
   virtual void remove_txpool_tx(const crypto::hash& txid) {}
   virtual txpool_tx_meta_t get_txpool_tx_meta(const crypto::hash& txid) const { return txpool_tx_meta_t(); }
   virtual bool get_txpool_tx_blob(const crypto::hash& txid, cryptonote::blobdata &bd) const { return false; }
   virtual cryptonote::blobdata get_txpool_tx_blob(const crypto::hash& txid) const { return ""; }
-  virtual bool for_all_txpool_txes(std::function<bool(const crypto::hash&, const txpool_tx_meta_t&, const cryptonote::blobdata*)>, bool include_blob = false) const { return false; }
+  virtual bool for_all_txpool_txes(std::function<bool(const crypto::hash&, const txpool_tx_meta_t&, const cryptonote::blobdata*)>, bool include_blob = false, bool include_unrelayed_txes = false) const { return false; }
 
   virtual void add_block( const block& blk
                         , const size_t& block_size

@@ -228,11 +228,13 @@ namespace cryptonote
 
     if(command_line::has_arg(vm, arg_start_mining))
     {
-      if(!cryptonote::get_account_address_from_str(m_mine_address, testnet, command_line::get_arg(vm, arg_start_mining)))
+      address_parse_info info;
+      if(!cryptonote::get_account_address_from_str(info, testnet, command_line::get_arg(vm, arg_start_mining)) || info.is_subaddress)
       {
         LOG_ERROR("Target account address " << command_line::get_arg(vm, arg_start_mining) << " has wrong format, starting daemon canceled");
         return false;
       }
+      m_mine_address = info.address;
       m_threads_total = 1;
       m_do_mining = true;
       if(command_line::has_arg(vm, arg_mining_threads))
@@ -289,8 +291,7 @@ namespace cryptonote
       return false;
     }
 
-    if(!m_template_no)
-      request_block_template();//lets update block template
+    request_block_template();//lets update block template
 
     boost::interprocess::ipcdetail::atomic_write32(&m_stop, 0);
     boost::interprocess::ipcdetail::atomic_write32(&m_thread_index, 0);
@@ -858,19 +859,6 @@ namespace cryptonote
           const boost::filesystem::path& power_supply_path = iter->path();
           if (boost::filesystem::is_directory(power_supply_path))
           {
-            std::ifstream power_supply_present_stream((power_supply_path / "present").string());
-            if (power_supply_present_stream.fail())
-            {
-              LOG_PRINT_L0("Unable to read from " << power_supply_path << " to check if power supply present");
-              continue;
-            }
-
-            if (power_supply_present_stream.get() != '1')
-            {
-              LOG_PRINT_L4("Power supply not present at " << power_supply_path);
-              continue;
-            }
-
             boost::filesystem::path power_supply_type_path = power_supply_path / "type";
             if (boost::filesystem::is_regular_file(power_supply_type_path))
             {

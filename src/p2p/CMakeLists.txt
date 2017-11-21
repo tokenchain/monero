@@ -39,6 +39,7 @@ monero_add_library(p2p ${P2P})
 target_link_libraries(p2p
   PUBLIC
     epee
+    version
     ${UPNP_LIBRARIES}
     ${Boost_CHRONO_LIBRARY}
     ${Boost_PROGRAM_OPTIONS_LIBRARY}
@@ -47,5 +48,3 @@ target_link_libraries(p2p
     ${Boost_THREAD_LIBRARY}
   PRIVATE
     ${EXTRA_LIBRARIES})
-add_dependencies(p2p
-  version)

@@ -48,14 +48,13 @@ public:
                                                     const std::string &addressString,
                                                     const std::string &viewKeyString,
                                                     const std::string &spendKeyString = "");
-    virtual bool closeWallet(Wallet *wallet);
+    virtual bool closeWallet(Wallet *wallet, bool store = true);
     bool walletExists(const std::string &path);
     bool verifyWalletPassword(const std::string &keys_file_name, const std::string &password, bool watch_only) const;
     std::vector<std::string> findWallets(const std::string &path);
     std::string errorString() const;
     void setDaemonAddress(const std::string &address);
     bool connected(uint32_t *version = NULL) const;
-    bool checkPayment(const std::string &address, const std::string &txid, const std::string &txkey, const std::string &daemon_address, uint64_t &received, uint64_t &height, std::string &error) const;
     uint64_t blockchainHeight() const;
     uint64_t blockchainTargetHeight() const;
     uint64_t networkDifficulty() const;

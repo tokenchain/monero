@@ -37,14 +37,11 @@ monero_add_executable(cn_deserialize
 target_link_libraries(cn_deserialize
   LINK_PRIVATE
     cryptonote_core
-    common
     blockchain_db
     p2p
     epee
     ${CMAKE_THREAD_LIBS_INIT})
 
-add_dependencies(cn_deserialize
-	version)
 set_property(TARGET cn_deserialize
 	PROPERTY
 	OUTPUT_NAME "monero-utils-deserialize")
@@ -66,8 +63,6 @@ target_link_libraries(object_sizes
     epee
     ${CMAKE_THREAD_LIBS_INIT})
 
-add_dependencies(object_sizes
-	version)
 set_property(TARGET object_sizes
 	PROPERTY
 	OUTPUT_NAME "monero-utils-object-sizes")

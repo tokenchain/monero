@@ -51,7 +51,7 @@
 #include "cryptonote_tx_utils.h"
 #include "cryptonote_basic/verification_context.h"
 #include "crypto/hash.h"
-#include "cryptonote_basic/checkpoints.h"
+#include "checkpoints/checkpoints.h"
 #include "cryptonote_basic/hardfork.h"
 #include "blockchain_db/blockchain_db.h"
 
@@ -374,6 +374,22 @@ namespace cryptonote
      * BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT additional (more recent) hashes.
      *
      * @param qblock_ids the foreign chain's "short history" (see get_short_chain_history)
+     * @param hashes the hashes to be returned, return-by-reference
+     * @param start_height the start height, return-by-reference
+     * @param current_height the current blockchain height, return-by-reference
+     *
+     * @return true if a block found in common, else false
+     */
+    bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, std::list<crypto::hash>& hashes, uint64_t& start_height, uint64_t& current_height) const;
+
+    /**
+     * @brief get recent block hashes for a foreign chain
+     *
+     * Find the split point between us and foreign blockchain and return
+     * (by reference) the most recent common block hash along with up to
+     * BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT additional (more recent) hashes.
+     *
+     * @param qblock_ids the foreign chain's "short history" (see get_short_chain_history)
      * @param resp return-by-reference the split height and subsequent blocks' hashes
      *
      * @return true if a block found in common, else false
@@ -427,6 +443,35 @@ namespace cryptonote
     bool handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp);
 
     /**
+     * @brief get number of outputs of an amount past the minimum spendable age
+     *
+     * @param amount the output amount
+     *
+     * @return the number of mature outputs
+     */
+    uint64_t get_num_mature_outputs(uint64_t amount) const;
+
+    /**
+     * @brief get random outputs (indices) for an amount
+     *
+     * @param amount the amount
+     * @param count the number of random outputs to choose
+     *
+     * @return the outputs' amount-global indices
+     */
+    std::vector<uint64_t> get_random_outputs(uint64_t amount, uint64_t count) const;
+
+    /**
+     * @brief get the public key for an output
+     *
+     * @param amount the output amount
+     * @param global_index the output amount-global index
+     *
+     * @return the public key
+     */
+    crypto::public_key get_output_key(uint64_t amount, uint64_t global_index) const;
+
+    /**
      * @brief gets random outputs to mix with
      *
      * This function takes an RPC request for outputs to mix with
@@ -456,6 +501,17 @@ namespace cryptonote
      * @return true
      */
     bool get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const;
+
+    /**
+     * @brief gets an output's key and unlocked state
+     *
+     * @param amount in - the output amount
+     * @param index in - the output global amount index
+     * @param mask out - the output's RingCT mask
+     * @param key out - the output's key
+     * @param unlocked out - the output's unlocked state
+     */
+    void get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, rct::key& mask, bool& unlocked) const;
 
     /**
      * @brief gets random ringct outputs to mix with
@@ -577,16 +633,6 @@ namespace cryptonote
      * @return the limit
      */
     uint64_t get_current_cumulative_blocksize_limit() const;
-
-    /**
-     * @brief checks if the blockchain is currently being stored
-     *
-     * Note: this should be meaningless in cases where Blockchain is not
-     * directly managing saving the blockchain to disk.
-     *
-     * @return true if Blockchain is having the chain stored currently, else false
-     */
-    bool is_storing_blockchain()const{return false;}
 
     /**
      * @brief gets the difficulty of the block with a given height
@@ -775,6 +821,13 @@ namespace cryptonote
     bool get_hard_fork_voting_info(uint8_t version, uint32_t &window, uint32_t &votes, uint32_t &threshold, uint64_t &earliest_height, uint8_t &voting) const;
 
     /**
+     * @brief get difficulty target based on chain and hardfork version
+     *
+     * @return difficulty target
+     */
+    uint64_t get_difficulty_target() const;
+
+    /**
      * @brief remove transactions from the transaction pool (if present)
      *
      * @param txids a list of hashes of transactions to be removed
@@ -884,19 +937,27 @@ namespace cryptonote
     void add_txpool_tx(transaction &tx, const txpool_tx_meta_t &meta);
     void update_txpool_tx(const crypto::hash &txid, const txpool_tx_meta_t &meta);
     void remove_txpool_tx(const crypto::hash &txid);
-    uint64_t get_txpool_tx_count() const;
+    uint64_t get_txpool_tx_count(bool include_unrelayed_txes = true) const;
     txpool_tx_meta_t get_txpool_tx_meta(const crypto::hash& txid) const;
     bool get_txpool_tx_blob(const crypto::hash& txid, cryptonote::blobdata &bd) const;
     cryptonote::blobdata get_txpool_tx_blob(const crypto::hash& txid) const;
-    bool for_all_txpool_txes(std::function<bool(const crypto::hash&, const txpool_tx_meta_t&, const cryptonote::blobdata*)>, bool include_blob = false) const;
+    bool for_all_txpool_txes(std::function<bool(const crypto::hash&, const txpool_tx_meta_t&, const cryptonote::blobdata*)>, bool include_blob = false, bool include_unrelayed_txes = true) const;
 
     bool is_within_compiled_block_hash_area(uint64_t height) const;
     bool is_within_compiled_block_hash_area() const { return is_within_compiled_block_hash_area(m_db->height()); }
+    uint64_t prevalidate_block_hashes(uint64_t height, const std::list<crypto::hash> &hashes);
 
     void lock();
     void unlock();
 
     void cancel();
+
+    /**
+     * @brief called when we see a tx originating from a block
+     *
+     * Used for handling txes from historical blocks in a fast way
+     */
+    void on_new_tx_from_block(const cryptonote::transaction &tx);
 
   private:
 
@@ -932,6 +993,7 @@ namespace cryptonote
     std::unordered_map<crypto::hash, std::unordered_map<crypto::key_image, bool>> m_check_txin_table;
 
     // SHA-3 hashes for each block and for fast pow checking
+    std::vector<crypto::hash> m_blocks_hash_of_hashes;
     std::vector<crypto::hash> m_blocks_hash_check;
     std::vector<crypto::hash> m_blocks_txs_check;
 

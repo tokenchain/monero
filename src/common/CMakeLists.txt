@@ -37,8 +37,7 @@ set(common_sources
   i18n.cpp
   password.cpp
   perf_timer.cpp
-  task_region.cpp
-  thread_group.cpp
+  threadpool.cpp
   updates.cpp)
 
 if (STACK_TRACE)
@@ -48,6 +47,7 @@ endif()
 set(common_headers)
 
 set(common_private_headers
+  apply_permutation.h
   base58.h
   boost_serialization_helper.h
   command_line.h
@@ -66,8 +66,7 @@ set(common_private_headers
   password.h
   perf_timer.h
   stack_trace.h
-  task_region.h
-  thread_group.h
+  threadpool.h
   updates.h)
 
 monero_private_headers(common

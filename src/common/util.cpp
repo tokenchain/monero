@@ -30,6 +30,10 @@
 
 #include <cstdio>
 
+#ifdef __GLIBC__
+#include <gnu/libc-version.h>
+#endif
+
 #include "include_base_utils.h"
 #include "file_io_utils.h"
 using namespace epee;
@@ -39,11 +43,13 @@ using namespace epee;
 #include "net/http_client.h"                        // epee::net_utils::...
 
 #ifdef WIN32
-#include <windows.h>
-#include <shlobj.h>
-#include <strsafe.h>
+  #include <windows.h>
+  #include <shlobj.h>
+  #include <strsafe.h>
 #else 
-#include <sys/utsname.h>
+  #include <sys/file.h>
+  #include <sys/utsname.h>
+  #include <sys/stat.h>
 #endif
 #include <boost/filesystem.hpp>
 #include <boost/asio.hpp>
@@ -53,7 +59,12 @@ namespace tools
 {
   std::function<void(int)> signal_handler::m_handler;
 
-  std::unique_ptr<std::FILE, tools::close_file> create_private_file(const std::string& name)
+  private_file::private_file() noexcept : m_handle(), m_filename() {}
+
+  private_file::private_file(std::FILE* handle, std::string&& filename) noexcept
+    : m_handle(handle), m_filename(std::move(filename)) {}
+
+  private_file private_file::create(std::string name)
   {
 #ifdef WIN32
     struct close_handle
@@ -70,17 +81,17 @@ namespace tools
       const bool fail = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, std::addressof(temp)) == 0;
       process.reset(temp);
       if (fail)
-        return nullptr;
+        return {};
     }
 
     DWORD sid_size = 0;
     GetTokenInformation(process.get(), TokenOwner, nullptr, 0, std::addressof(sid_size));
     if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-      return nullptr;
+      return {};
 
     std::unique_ptr<char[]> sid{new char[sid_size]};
     if (!GetTokenInformation(process.get(), TokenOwner, sid.get(), sid_size, std::addressof(sid_size)))
-      return nullptr;
+      return {};
 
     const PSID psid = reinterpret_cast<const PTOKEN_OWNER>(sid.get())->Owner;
     const DWORD daclSize =
@@ -88,17 +99,17 @@ namespace tools
 
     const std::unique_ptr<char[]> dacl{new char[daclSize]};
     if (!InitializeAcl(reinterpret_cast<PACL>(dacl.get()), daclSize, ACL_REVISION))
-      return nullptr;
+      return {};
 
     if (!AddAccessAllowedAce(reinterpret_cast<PACL>(dacl.get()), ACL_REVISION, (READ_CONTROL | FILE_GENERIC_READ | DELETE), psid))
-      return nullptr;
+      return {};
 
     SECURITY_DESCRIPTOR descriptor{};
     if (!InitializeSecurityDescriptor(std::addressof(descriptor), SECURITY_DESCRIPTOR_REVISION))
-      return nullptr;
+      return {};
 
     if (!SetSecurityDescriptorDacl(std::addressof(descriptor), true, reinterpret_cast<PACL>(dacl.get()), false))
-      return nullptr;
+      return {};
 
     SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), std::addressof(descriptor), false};
     std::unique_ptr<void, close_handle> file{
@@ -106,7 +117,7 @@ namespace tools
         name.c_str(),
         GENERIC_WRITE, FILE_SHARE_READ,
         std::addressof(attributes),
-        CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY,
+        CREATE_NEW, (FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE),
         nullptr
       )
     };
@@ -121,22 +132,49 @@ namespace tools
         {
           _close(fd);
         }
-        return {real_file, tools::close_file{}};
+        return {real_file, std::move(name)};
       }
     }
 #else
-    const int fd = open(name.c_str(), (O_RDWR | O_EXCL | O_CREAT), S_IRUSR);
-    if (0 <= fd)
+    const int fdr = open(name.c_str(), (O_RDONLY | O_CREAT), S_IRUSR);
+    if (0 <= fdr)
     {
-      std::FILE* file = fdopen(fd, "w");
-      if (!file)
+      struct stat rstats = {};
+      if (fstat(fdr, std::addressof(rstats)) != 0)
       {
-        close(fd);
+        close(fdr);
+        return {};
       }
-      return {file, tools::close_file{}};
+      fchmod(fdr, (S_IRUSR | S_IWUSR));
+      const int fdw = open(name.c_str(), O_RDWR);
+      fchmod(fdr, rstats.st_mode);
+      close(fdr);
+
+      if (0 <= fdw)
+      {
+        struct stat wstats = {};
+        if (fstat(fdw, std::addressof(wstats)) == 0 &&
+            rstats.st_dev == wstats.st_dev && rstats.st_ino == wstats.st_ino &&
+            flock(fdw, (LOCK_EX | LOCK_NB)) == 0 && ftruncate(fdw, 0) == 0)
+        {
+          std::FILE* file = fdopen(fdw, "w");
+          if (file) return {file, std::move(name)};
+        }
+        close(fdw);
+      }
     }
 #endif
-    return nullptr;
+    return {};
+  }
+
+  private_file::~private_file() noexcept
+  {
+    try
+    {
+      boost::system::error_code ec{};
+      boost::filesystem::remove(filename(), ec);
+    }
+    catch (...) {}
   }
 
 #ifdef WIN32
@@ -367,7 +405,7 @@ namespace tools
 #else
 std::string get_nix_version_display_string()
 {
-  utsname un;
+  struct utsname un;
 
   if(uname(&un) < 0)
     return std::string("*nix: failed to get os version");
@@ -501,6 +539,24 @@ std::string get_nix_version_display_string()
       return true;
     }
     return false;
+  }
+  bool on_startup()
+  {
+    sanitize_locale();
+
+#ifdef __GLIBC__
+    const char *ver = gnu_get_libc_version();
+    if (!strcmp(ver, "2.25"))
+      MCLOG_RED(el::Level::Warning, "global", "Running with glibc " << ver << ", hangs may occur - change glibc version if possible");
+#endif
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000
+    SSL_library_init();
+#else
+    OPENSSL_init_ssl(0, NULL);
+#endif
+
+    return true;
   }
   void set_strict_default_file_permissions(bool strict)
   {
