@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -42,8 +42,10 @@
 #include "common/command_line.h"
 #include "console_handler.h"
 #include "p2p/net_node.h"
+#include "p2p/net_node.inl"
 //#include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
+#include "cryptonote_protocol/cryptonote_protocol_handler.inl"
 #include "core_proxy.h"
 #include "version.h"
 
@@ -78,8 +80,7 @@ int main(int argc, char* argv[])
 
 
   po::options_description desc("Allowed options");
-  // tools::get_default_data_dir() can't be called during static initialization
-  command_line::add_arg(desc, cryptonote::arg_data_dir, tools::get_default_data_dir());
+  command_line::add_arg(desc, cryptonote::arg_data_dir);
   nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<tests::proxy_core> >::init_options(desc);
 
   po::variables_map vm;
@@ -159,15 +160,21 @@ string tx2str(const cryptonote::transaction& tx, const cryptonote::hash256& tx_h
     return ss.str();
 }*/
 
-bool tests::proxy_core::handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, bool keeped_by_block, bool relayed, bool do_not_relay) {
-    if (!keeped_by_block)
+bool tests::proxy_core::handle_incoming_tx(const cryptonote::tx_blob_entry& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed) {
+    if (tx_relay != cryptonote::relay_method::block)
         return true;
 
     crypto::hash tx_hash = null_hash;
     crypto::hash tx_prefix_hash = null_hash;
     transaction tx;
 
-    if (!parse_and_validate_tx_from_blob(tx_blob, tx, tx_hash, tx_prefix_hash)) {
+    if (tx_blob.prunable_hash != crypto::null_hash)
+    {
+        cerr << "WRONG TRANSACTION, pruned blob rejected" << endl;
+        return false;
+    }
+
+    if (!parse_and_validate_tx_from_blob(tx_blob.blob, tx, tx_hash, tx_prefix_hash)) {
         cerr << "WRONG TRANSACTION BLOB, Failed to parse, rejected" << endl;
         return false;
     }
@@ -175,7 +182,7 @@ bool tests::proxy_core::handle_incoming_tx(const cryptonote::blobdata& tx_blob, 
     cout << "TX " << endl << endl;
     cout << tx_hash << endl;
     cout << tx_prefix_hash << endl;
-    cout << tx_blob.size() << endl;
+    cout << tx_blob.blob.size() << endl;
     //cout << string_tools::buff_to_hex_nodelimer(tx_blob) << endl << endl;
     cout << obj_to_json_str(tx) << endl;
     cout << endl << "ENDTX" << endl;
@@ -183,20 +190,20 @@ bool tests::proxy_core::handle_incoming_tx(const cryptonote::blobdata& tx_blob, 
     return true;
 }
 
-bool tests::proxy_core::handle_incoming_txs(const std::list<blobdata>& tx_blobs, std::vector<tx_verification_context>& tvc, bool keeped_by_block, bool relayed, bool do_not_relay)
+bool tests::proxy_core::handle_incoming_txs(const std::vector<tx_blob_entry>& tx_blobs, std::vector<tx_verification_context>& tvc, cryptonote::relay_method tx_relay, bool relayed)
 {
     tvc.resize(tx_blobs.size());
     size_t i = 0;
     for (const auto &tx_blob: tx_blobs)
     {
-      if (!handle_incoming_tx(tx_blob, tvc[i], keeped_by_block, relayed, do_not_relay))
+      if (!handle_incoming_tx(tx_blob, tvc[i], tx_relay, relayed))
           return false;
       ++i;
     }
     return true;
 }
 
-bool tests::proxy_core::handle_incoming_block(const cryptonote::blobdata& block_blob, cryptonote::block_verification_context& bvc, bool update_miner_blocktemplate) {
+bool tests::proxy_core::handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block_, cryptonote::block_verification_context& bvc, bool update_miner_blocktemplate) {
     block b = AUTO_VAL_INIT(b);
 
     if(!parse_and_validate_block_from_blob(block_blob, b)) {
@@ -208,7 +215,7 @@ bool tests::proxy_core::handle_incoming_block(const cryptonote::blobdata& block_
     crypto::hash lh;
     cout << "BLOCK" << endl << endl;
     cout << (h = get_block_hash(b)) << endl;
-    cout << (lh = get_block_longhash(b, 0)) << endl;
+    cout << (lh = get_block_longhash(NULL, b, 0, 0)) << endl;
     cout << get_transaction_hash(b.miner_tx) << endl;
     cout << ::get_object_blobsize(b.miner_tx) << endl;
     //cout << string_tools::buff_to_hex_nodelimer(block_blob) << endl;
@@ -235,7 +242,7 @@ void tests::proxy_core::get_blockchain_top(uint64_t& height, crypto::hash& top_i
 bool tests::proxy_core::init(const boost::program_options::variables_map& /*vm*/) {
     generate_genesis_block(m_genesis, config::GENESIS_TX, config::GENESIS_NONCE);
     crypto::hash h = get_block_hash(m_genesis);
-    add_block(h, get_block_longhash(m_genesis, 0), m_genesis, block_to_blob(m_genesis));
+    add_block(h, get_block_longhash(NULL, m_genesis, 0, 0), m_genesis, block_to_blob(m_genesis));
     return true;
 }
 

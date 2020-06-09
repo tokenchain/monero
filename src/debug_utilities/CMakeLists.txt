@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2017, The Monero Project
+# Copyright (c) 2014-2019, The Monero Project
 #
 # All rights reserved.
 #
@@ -38,6 +38,8 @@ target_link_libraries(cn_deserialize
   LINK_PRIVATE
     cryptonote_core
     blockchain_db
+    device
+    ringct
     p2p
     epee
     ${CMAKE_THREAD_LIBS_INIT})
@@ -66,4 +68,26 @@ target_link_libraries(object_sizes
 set_property(TARGET object_sizes
 	PROPERTY
 	OUTPUT_NAME "monero-utils-object-sizes")
+
+
+set(dns_checks_sources
+  dns_checks.cpp
+  )
+
+monero_add_executable(dns_checks
+  ${dns_checks_sources}
+  ${dns_checks_private_headers})
+
+target_link_libraries(dns_checks
+  LINK_PRIVATE
+    common
+    epee
+    version
+    ${Boost_PROGRAM_OPTIONS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+    ${CMAKE_THREAD_LIBS_INIT})
+
+set_property(TARGET dns_checks
+	PROPERTY
+	OUTPUT_NAME "monero-utils-dns-checks")
 

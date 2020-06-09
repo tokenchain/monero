@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -32,6 +32,7 @@
 
 #include "wallet/wallet2.h"
 #include "common/dns_utils.h"
+#include "simplewallet/simplewallet.h"
 #include <string>
 
 TEST(AddressFromTXT, Success)
@@ -83,7 +84,7 @@ TEST(AddressFromTXT, Failure)
 
 TEST(AddressFromURL, Success)
 {
-  const std::string addr = "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A";
+  const std::string addr = MONERO_DONATION_ADDR;
   
   bool dnssec_result = false;
 
@@ -108,7 +109,7 @@ TEST(AddressFromURL, Failure)
 {
   bool dnssec_result = false;
 
-  std::vector<std::string> addresses = tools::dns_utils::addresses_from_url("example.invalid", dnssec_result);
+  std::vector<std::string> addresses = tools::dns_utils::addresses_from_url("example.veryinvalid", dnssec_result);
 
   // for a non-existing domain such as "example.invalid", the non-existence is proved with NSEC records
   ASSERT_TRUE(dnssec_result);

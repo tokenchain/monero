@@ -1,4 +1,4 @@
-// Copyright (c) 2016, The Monero Project
+// Copyright (c) 2016-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -37,7 +37,7 @@
   std::string address, payment_id, recipient_name, description, error; \
   uint64_t amount; \
   std::vector<std::string> unknown_parameters; \
-  tools::wallet2 w(true); \
+  tools::wallet2 w(cryptonote::TESTNET); \
   bool ret = w.parse_uri(uri, address, payment_id, amount, description, recipient_name, unknown_parameters, error); \
   ASSERT_EQ(ret, expected);
 
@@ -144,9 +144,7 @@ TEST(uri, bad_payment_id)
 
 TEST(uri, short_payment_id)
 {
-  PARSE_URI("monero:" TEST_ADDRESS"?tx_payment_id=1234567890123456", true);
-  ASSERT_EQ(address, TEST_ADDRESS);
-  ASSERT_EQ(payment_id, "1234567890123456");
+  PARSE_URI("monero:" TEST_ADDRESS"?tx_payment_id=1234567890123456", false);
 }
 
 TEST(uri, long_payment_id)

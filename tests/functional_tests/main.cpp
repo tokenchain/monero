@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -31,6 +31,7 @@
 #include <boost/program_options.hpp>
 
 #include "include_base_utils.h"
+#include "string_tools.h"
 using namespace epee;
 
 #include "common/command_line.h"

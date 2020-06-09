@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -43,6 +43,8 @@
 #include <vector>
 #include <deque>
 #include <list>
+#include <set>
+#include <unordered_set>
 #include <string>
 #include <boost/type_traits/is_integral.hpp>
 #include <boost/type_traits/integral_constant.hpp>
@@ -61,15 +63,17 @@ struct is_blob_type { typedef boost::false_type type; };
 template <class T>
 struct has_free_serializer { typedef boost::true_type type; };
 
-/*! \struct is_pair_type 
+/*! \struct is_basic_type
  *
  * \brief a descriptor for dispatching serialize
  */
 template <class T>
-struct is_pair_type { typedef boost::false_type type; };
+struct is_basic_type { typedef boost::false_type type; };
 
 template<typename F, typename S>
-struct is_pair_type<std::pair<F,S>> { typedef boost::true_type type; };
+struct is_basic_type<std::pair<F,S>> { typedef boost::true_type type; };
+template<>
+struct is_basic_type<std::string> { typedef boost::true_type type; };
 
 /*! \struct serializer
  *
@@ -87,7 +91,7 @@ struct is_pair_type<std::pair<F,S>> { typedef boost::true_type type; };
 template <class Archive, class T>
 struct serializer{
   static bool serialize(Archive &ar, T &v) {
-    return serialize(ar, v, typename boost::is_integral<T>::type(), typename is_blob_type<T>::type(), typename is_pair_type<T>::type());
+    return serialize(ar, v, typename boost::is_integral<T>::type(), typename is_blob_type<T>::type(), typename is_basic_type<T>::type());
   }
   template<typename A>
   static bool serialize(Archive &ar, T &v, boost::false_type, boost::true_type, A a) {
@@ -208,7 +212,7 @@ inline bool do_serialize(Archive &ar, bool &v)
  * \brief self-explanatory
  */
 #define END_SERIALIZE()				\
-  return true;					\
+  return ar.stream().good();			\
   }
 
 /*! \macro VALUE(f)
@@ -314,7 +318,7 @@ namespace serialization {
      * \brief self explanatory
      */
     template<class Stream>
-    bool do_check_stream_state(Stream& s, boost::mpl::bool_<true>)
+    bool do_check_stream_state(Stream& s, boost::mpl::bool_<true>, bool noeof)
     {
       return s.good();
     }
@@ -325,13 +329,13 @@ namespace serialization {
      * \detailed Also checks to make sure that the stream is not at EOF
      */
     template<class Stream>
-    bool do_check_stream_state(Stream& s, boost::mpl::bool_<false>)
+    bool do_check_stream_state(Stream& s, boost::mpl::bool_<false>, bool noeof)
     {
       bool result = false;
       if (s.good())
 	{
 	  std::ios_base::iostate state = s.rdstate();
-	  result = EOF == s.peek();
+	  result = noeof || EOF == s.peek();
 	  s.clear(state);
 	}
       return result;
@@ -343,9 +347,9 @@ namespace serialization {
    * \brief calls detail::do_check_stream_state for ar
    */
   template<class Archive>
-  bool check_stream_state(Archive& ar)
+  bool check_stream_state(Archive& ar, bool noeof = false)
   {
-    return detail::do_check_stream_state(ar.stream(), typename Archive::is_saving());
+    return detail::do_check_stream_state(ar.stream(), typename Archive::is_saving(), noeof);
   }
 
   /*! \fn serialize
@@ -356,11 +360,17 @@ namespace serialization {
   inline bool serialize(Archive &ar, T &v)
   {
     bool r = do_serialize(ar, v);
-    return r && check_stream_state(ar);
+    return r && check_stream_state(ar, false);
+  }
+
+  /*! \fn serialize
+   *
+   * \brief serializes \a v into \a ar
+   */
+  template <class Archive, class T>
+  inline bool serialize_noeof(Archive &ar, T &v)
+  {
+    bool r = do_serialize(ar, v);
+    return r && check_stream_state(ar, true);
   }
 }
-
-#include "string.h"
-#include "vector.h"
-#include "list.h"
-#include "pair.h"

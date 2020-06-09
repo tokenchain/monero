@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2017, The Monero Project
+# Copyright (c) 2014-2019, The Monero Project
 #
 # All rights reserved.
 #
@@ -33,15 +33,27 @@ set(common_sources
   command_line.cpp
   dns_utils.cpp
   download.cpp
+  error.cpp
+  expect.cpp
   util.cpp
   i18n.cpp
+  notify.cpp
   password.cpp
   perf_timer.cpp
+  pruning.cpp
+  spawn.cpp
   threadpool.cpp
-  updates.cpp)
+  updates.cpp
+  aligned.c
+  timings.cc
+  combinator.cpp)
 
 if (STACK_TRACE)
   list(APPEND common_sources stack_trace.cpp)
+endif()
+
+if (BACKCOMPAT)
+  list(APPEND common_sources compat/glibc_compat.cpp)
 endif()
 
 set(common_headers)
@@ -54,9 +66,12 @@ set(common_private_headers
   common_fwd.h
   dns_utils.h
   download.h
+  error.h
+  expect.h
   http_connection.h
-  int-util.h
+  notify.h
   pod-class.h
+  pruning.h
   rpc_client.h
   scoped_message_writer.h
   unordered_containers_boost_serialization.h
@@ -65,19 +80,24 @@ set(common_private_headers
   i18n.h
   password.h
   perf_timer.h
+  spawn.h
   stack_trace.h
   threadpool.h
-  updates.h)
+  updates.h
+  aligned.h
+  timings.h
+  combinator.h
+  utf8.h)
 
 monero_private_headers(common
   ${common_private_headers})
 monero_add_library(common
   ${common_sources}
   ${common_headers}
-  ${common_private_headers})
+  ${common_private_headers}
+  DEPENDS generate_translations_header)
 target_link_libraries(common
   PUBLIC
-    epee
     cncrypto
     ${UNBOUND_LIBRARY}
     ${LIBUNWIND_LIBRARIES}
@@ -86,6 +106,7 @@ target_link_libraries(common
     ${Boost_SYSTEM_LIBRARY}
     ${Boost_THREAD_LIBRARY}
     ${Boost_REGEX_LIBRARY}
+    ${Boost_CHRONO_LIBRARY}
   PRIVATE
     ${OPENSSL_LIBRARIES}
     ${EXTRA_LIBRARIES})

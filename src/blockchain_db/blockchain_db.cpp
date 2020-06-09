@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -28,23 +28,13 @@
 
 #include <boost/range/adaptor/reversed.hpp>
 
+#include "string_tools.h"
 #include "blockchain_db.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "profile_tools.h"
 #include "ringct/rctOps.h"
 
 #include "lmdb/db_lmdb.h"
-#ifdef BERKELEY_DB
-#include "berkeleydb/db_bdb.h"
-#endif
-
-static const char *db_types[] = {
-  "lmdb",
-#ifdef BERKELEY_DB
-  "berkeley",
-#endif
-  NULL
-};
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "blockchain.db"
@@ -54,40 +44,95 @@ using epee::string_tools::pod_to_hex;
 namespace cryptonote
 {
 
-bool blockchain_valid_db_type(const std::string& db_type)
+bool matches_category(relay_method method, relay_category category) noexcept
 {
-  int i;
-  for (i=0; db_types[i]; i++)
+  switch (category)
   {
-    if (db_types[i] == db_type)
+    default:
+      return false;
+    case relay_category::all:
       return true;
+    case relay_category::relayable:
+      return method != relay_method::none;
+    case relay_category::broadcasted:
+    case relay_category::legacy:
+      break;
+  }
+  // check for "broadcasted" or "legacy" methods:
+  switch (method)
+  {
+    default:
+    case relay_method::local:
+    case relay_method::stem:
+      return false;
+    case relay_method::block:
+    case relay_method::fluff:
+      return true;
+    case relay_method::none:
+      break;
+  }
+  return category == relay_category::legacy;
+}
+
+void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
+{
+  kept_by_block = 0;
+  do_not_relay = 0;
+  is_local = 0;
+  dandelionpp_stem = 0;
+
+  switch (method)
+  {
+    case relay_method::none:
+      do_not_relay = 1;
+      break;
+    case relay_method::local:
+      is_local = 1;
+      break;
+    default:
+    case relay_method::fluff:
+      break;
+    case relay_method::stem:
+      dandelionpp_stem = 1;
+      break;
+    case relay_method::block:
+      kept_by_block = 1;
+      break;
+  }
+}
+
+relay_method txpool_tx_meta_t::get_relay_method() const noexcept
+{
+  if (kept_by_block)
+    return relay_method::block;
+  if (do_not_relay)
+    return relay_method::none;
+  if (is_local)
+    return relay_method::local;
+  if (dandelionpp_stem)
+    return relay_method::stem;
+  return relay_method::fluff;
+}
+
+bool txpool_tx_meta_t::upgrade_relay_method(relay_method method) noexcept
+{
+  static_assert(relay_method::none < relay_method::local, "bad relay_method value");
+  static_assert(relay_method::local < relay_method::stem, "bad relay_method value");
+  static_assert(relay_method::stem < relay_method::fluff, "bad relay_method value");
+  static_assert(relay_method::fluff < relay_method::block, "bad relay_method value");
+
+  if (get_relay_method() < method)
+  {
+    set_relay_method(method);
+    return true;
   }
   return false;
 }
 
-std::string blockchain_db_types(const std::string& sep)
-{
-  int i;
-  std::string ret = "";
-  for (i=0; db_types[i]; i++)
-  {
-    if (i)
-      ret += sep;
-    ret += db_types[i];
-  }
-  return ret;
-}
-
-std::string arg_db_type_description = "Specify database type, available: " + cryptonote::blockchain_db_types(", ");
-const command_line::arg_descriptor<std::string> arg_db_type = {
-  "db-type"
-, arg_db_type_description.c_str()
-, DEFAULT_DB_TYPE
-};
 const command_line::arg_descriptor<std::string> arg_db_sync_mode = {
   "db-sync-mode"
-, "Specify sync option, using format [safe|fast|fastest]:[sync|async]:[nblocks_per_sync]." 
-, "fast:async:1000"
+, "Specify sync option, using format [safe|fast|fastest]:[sync|async]:[<nblocks_per_sync>[blocks]|<nbytes_per_sync>[bytes]]." 
+, "fast:async:250000000bytes"
 };
 const command_line::arg_descriptor<bool> arg_db_salvage  = {
   "db-salvage"
@@ -95,20 +140,13 @@ const command_line::arg_descriptor<bool> arg_db_salvage  = {
 , false
 };
 
-BlockchainDB *new_db(const std::string& db_type)
+BlockchainDB *new_db()
 {
-  if (db_type == "lmdb")
-    return new BlockchainLMDB();
-#if defined(BERKELEY_DB)
-  if (db_type == "berkeley")
-    return new BlockchainBDB();
-#endif
-  return NULL;
+  return new BlockchainLMDB();
 }
 
 void BlockchainDB::init_options(boost::program_options::options_description& desc)
 {
-  command_line::add_arg(desc, arg_db_type);
   command_line::add_arg(desc, arg_db_sync_mode);
   command_line::add_arg(desc, arg_db_salvage);
 }
@@ -120,10 +158,12 @@ void BlockchainDB::pop_block()
   pop_block(blk, txs);
 }
 
-void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const transaction& tx, const crypto::hash* tx_hash_ptr)
+void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata>& txp, const crypto::hash* tx_hash_ptr, const crypto::hash* tx_prunable_hash_ptr)
 {
+  const transaction &tx = txp.first;
+
   bool miner_tx = false;
-  crypto::hash tx_hash;
+  crypto::hash tx_hash, tx_prunable_hash;
   if (!tx_hash_ptr)
   {
     // should only need to compute hash for miner transactions
@@ -133,6 +173,13 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const transacti
   else
   {
     tx_hash = *tx_hash_ptr;
+  }
+  if (tx.version >= 2)
+  {
+    if (!tx_prunable_hash_ptr)
+      tx_prunable_hash = get_transaction_prunable_hash(tx, &txp.second);
+    else
+      tx_prunable_hash = *tx_prunable_hash_ptr;
   }
 
   for (const txin_v& tx_input : tx.vin)
@@ -160,9 +207,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const transacti
     }
   }
 
-  uint64_t tx_id = add_transaction_data(blk_hash, tx, tx_hash);
+  uint64_t tx_id = add_transaction_data(blk_hash, txp, tx_hash, tx_prunable_hash);
 
-  std::vector<uint64_t> amount_output_indices;
+  std::vector<uint64_t> amount_output_indices(tx.vout.size());
 
   // iterate tx.vout using indices instead of C++11 foreach syntax because
   // we need the index
@@ -175,26 +222,31 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const transacti
       cryptonote::tx_out vout = tx.vout[i];
       rct::key commitment = rct::zeroCommit(vout.amount);
       vout.amount = 0;
-      amount_output_indices.push_back(add_output(tx_hash, vout, i, tx.unlock_time,
-        &commitment));
+      amount_output_indices[i] = add_output(tx_hash, vout, i, tx.unlock_time,
+        &commitment);
     }
     else
     {
-      amount_output_indices.push_back(add_output(tx_hash, tx.vout[i], i, tx.unlock_time,
-        tx.version > 1 ? &tx.rct_signatures.outPk[i].mask : NULL));
+      amount_output_indices[i] = add_output(tx_hash, tx.vout[i], i, tx.unlock_time,
+        tx.version > 1 ? &tx.rct_signatures.outPk[i].mask : NULL);
     }
   }
   add_tx_amount_output_indices(tx_id, amount_output_indices);
 }
 
-uint64_t BlockchainDB::add_block( const block& blk
-                                , const size_t& block_size
+uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
+                                , size_t block_weight
+                                , uint64_t long_term_block_weight
                                 , const difficulty_type& cumulative_difficulty
                                 , const uint64_t& coins_generated
-                                , const std::vector<transaction>& txs
+                                , const std::vector<std::pair<transaction, blobdata>>& txs
                                 )
 {
-  block_txn_start(false);
+  const block &blk = blck.first;
+
+  // sanity
+  if (blk.tx_hashes.size() != txs.size())
+    throw std::runtime_error("Inconsistent tx/hashes sizes");
 
   TIME_MEASURE_START(time1);
   crypto::hash blk_hash = get_block_hash(blk);
@@ -206,13 +258,22 @@ uint64_t BlockchainDB::add_block( const block& blk
   // call out to add the transactions
 
   time1 = epee::misc_utils::get_tick_count();
-  add_transaction(blk_hash, blk.miner_tx);
+
+  uint64_t num_rct_outs = 0;
+  add_transaction(blk_hash, std::make_pair(blk.miner_tx, tx_to_blob(blk.miner_tx)));
+  if (blk.miner_tx.version == 2)
+    num_rct_outs += blk.miner_tx.vout.size();
   int tx_i = 0;
   crypto::hash tx_hash = crypto::null_hash;
-  for (const transaction& tx : txs)
+  for (const std::pair<transaction, blobdata>& tx : txs)
   {
     tx_hash = blk.tx_hashes[tx_i];
     add_transaction(blk_hash, tx, &tx_hash);
+    for (const auto &vout: tx.first.vout)
+    {
+      if (vout.amount == 0)
+        ++num_rct_outs;
+    }
     ++tx_i;
   }
   TIME_MEASURE_FINISH(time1);
@@ -220,13 +281,11 @@ uint64_t BlockchainDB::add_block( const block& blk
 
   // call out to subclass implementation to add the block & metadata
   time1 = epee::misc_utils::get_tick_count();
-  add_block(blk, block_size, cumulative_difficulty, coins_generated, blk_hash);
+  add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, num_rct_outs, blk_hash);
   TIME_MEASURE_FINISH(time1);
   time_add_block1 += time1;
 
   m_hardfork->add(blk, prev_height);
-
-  block_txn_stop();
 
   ++num_calls;
 
@@ -246,7 +305,10 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {
-    txs.push_back(get_tx(h));
+    cryptonote::transaction tx;
+    if (!get_tx(h, tx) && !get_pruned_tx(h, tx))
+      throw DB_ERROR("Failed to get pruned or unpruned transaction from the db");
+    txs.push_back(std::move(tx));
     remove_transaction(h);
   }
   remove_transaction(get_transaction_hash(blk.miner_tx));
@@ -259,7 +321,7 @@ bool BlockchainDB::is_open() const
 
 void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
 {
-  transaction tx = get_tx(tx_hash);
+  transaction tx = get_pruned_tx(tx_hash);
 
   for (const txin_v& tx_input : tx.vin)
   {
@@ -278,7 +340,7 @@ block BlockchainDB::get_block_from_height(const uint64_t& height) const
   blobdata bd = get_block_blob_from_height(height);
   block b;
   if (!parse_and_validate_block_from_blob(bd, b))
-    throw new DB_ERROR("Failed to parse block from blob retrieved from the db");
+    throw DB_ERROR("Failed to parse block from blob retrieved from the db");
 
   return b;
 }
@@ -288,7 +350,7 @@ block BlockchainDB::get_block(const crypto::hash& h) const
   blobdata bd = get_block_blob(h);
   block b;
   if (!parse_and_validate_block_from_blob(bd, b))
-    throw new DB_ERROR("Failed to parse block from blob retrieved from the db");
+    throw DB_ERROR("Failed to parse block from blob retrieved from the db");
 
   return b;
 }
@@ -299,7 +361,18 @@ bool BlockchainDB::get_tx(const crypto::hash& h, cryptonote::transaction &tx) co
   if (!get_tx_blob(h, bd))
     return false;
   if (!parse_and_validate_tx_from_blob(bd, tx))
-    throw new DB_ERROR("Failed to parse transaction from blob retrieved from the db");
+    throw DB_ERROR("Failed to parse transaction from blob retrieved from the db");
+
+  return true;
+}
+
+bool BlockchainDB::get_pruned_tx(const crypto::hash& h, cryptonote::transaction &tx) const
+{
+  blobdata bd;
+  if (!get_pruned_tx_blob(h, bd))
+    return false;
+  if (!parse_and_validate_tx_base_from_blob(bd, tx))
+    throw DB_ERROR("Failed to parse transaction base from blob retrieved from the db");
 
   return true;
 }
@@ -308,7 +381,15 @@ transaction BlockchainDB::get_tx(const crypto::hash& h) const
 {
   transaction tx;
   if (!get_tx(h, tx))
-    throw new TX_DNE(std::string("tx with hash ").append(epee::string_tools::pod_to_hex(h)).append(" not found in db").c_str());
+    throw TX_DNE(std::string("tx with hash ").append(epee::string_tools::pod_to_hex(h)).append(" not found in db").c_str());
+  return tx;
+}
+
+transaction BlockchainDB::get_pruned_tx(const crypto::hash& h) const
+{
+  transaction tx;
+  if (!get_pruned_tx(h, tx))
+    throw TX_DNE(std::string("pruned tx with hash ").append(epee::string_tools::pod_to_hex(h)).append(" not found in db").c_str());
   return tx;
 }
 
@@ -926,6 +1007,25 @@ void BlockchainDB::fixup()
     }
   }
   batch_stop();
+}
+
+bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)
+{
+  try
+  {
+    txpool_tx_meta_t meta{};
+    if (!get_txpool_tx_meta(tx_hash, meta))
+    {
+      MERROR("Failed to get tx meta from txpool");
+      return false;
+    }
+    return meta.matches(category);
+  }
+  catch (const std::exception &e)
+  {
+    MERROR("Failed to get tx meta from txpool: " << e.what());
+  }
+  return false;
 }
 
 }  // namespace cryptonote

@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_core/cryptonote_tx_utils.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "include_base_utils.h"
 
@@ -50,6 +51,9 @@ namespace tools
     //       wallet_internal_error
     //         unexpected_txin_type
     //         wallet_not_initialized
+    //       multisig_export_needed
+    //       multisig_import_needed
+    //       password_needed
     //   std::logic_error
     //     wallet_logic_error *
     //       file_exists
@@ -58,6 +62,7 @@ namespace tools
     //       file_save_error
     //       invalid_password
     //       invalid_priority
+    //       invalid_multisig_seed
     //       refresh_error *
     //         acc_outs_lookup_error
     //         block_parse_error
@@ -66,8 +71,10 @@ namespace tools
     //         get_out_indexes_error
     //         tx_parse_error
     //         get_tx_pool_error
+    //         out_of_hashchain_bounds_error
+    //       signature_check_failed
     //       transfer_error *
-    //         get_random_outs_general_error
+    //         get_outs_general_error
     //         not_enough_unlocked_money
     //         not_enough_money
     //         tx_not_possible
@@ -82,6 +89,8 @@ namespace tools
     //         no_connection_to_daemon
     //         is_key_image_spent_error
     //         get_histogram_error
+    //         get_output_distribution
+    //         payment_required
     //       wallet_files_doesnt_correspond
     //
     // * - class with protected ctor
@@ -121,7 +130,7 @@ namespace tools
       get_blocks_error_message_index,
       get_hashes_error_message_index,
       get_out_indices_error_message_index,
-      get_random_outs_error_message_index
+      get_outs_error_message_index
     };
 
     template<typename Base, int msg_index>
@@ -186,7 +195,38 @@ namespace tools
       {
       }
     };
-
+    //----------------------------------------------------------------------------------------------------
+    struct multisig_export_needed : public wallet_runtime_error
+    {
+      explicit multisig_export_needed(std::string&& loc)
+        : wallet_runtime_error(std::move(loc), "This signature was made with stale data: export fresh multisig data, which other participants must then use")
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct multisig_import_needed : public wallet_runtime_error
+    {
+      explicit multisig_import_needed(std::string&& loc)
+        : wallet_runtime_error(std::move(loc), "Not enough multisig data was found to sign: import multisig data from more other participants")
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct password_needed : public wallet_runtime_error
+    {
+      explicit password_needed(std::string&& loc, const std::string &msg = "Password needed")
+        : wallet_runtime_error(std::move(loc), msg)
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct password_entry_failed : public wallet_runtime_error
+    {
+      explicit password_entry_failed(std::string&& loc, const std::string &msg = "Password entry failed")
+        : wallet_runtime_error(std::move(loc), msg)
+      {
+      }
+    };
     //----------------------------------------------------------------------------------------------------
     const char* const file_error_messages[] = {
       "file already exists",
@@ -249,6 +289,16 @@ namespace tools
       std::string to_string() const { return wallet_logic_error::to_string(); }
     };
 
+    struct invalid_multisig_seed : public wallet_logic_error
+    {
+      explicit invalid_multisig_seed(std::string&& loc)
+        : wallet_logic_error(std::move(loc), "invalid multisig seed")
+      {
+      }
+
+      std::string to_string() const { return wallet_logic_error::to_string(); }
+    };
+
     //----------------------------------------------------------------------------------------------------
     struct invalid_pregenerated_random : public wallet_logic_error
     {
@@ -265,6 +315,28 @@ namespace tools
     protected:
       explicit refresh_error(std::string&& loc, const std::string& message)
         : wallet_logic_error(std::move(loc), message)
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct index_outofbound : public wallet_logic_error
+    {
+      explicit index_outofbound(std::string&& loc, const std::string& message)
+        : wallet_logic_error(std::move(loc), message)
+      {
+      }
+    };
+    struct account_index_outofbound : public index_outofbound
+    {
+      explicit account_index_outofbound(std::string&& loc)
+        : index_outofbound(std::move(loc), "account index is out of bound")
+      {
+      }
+    };
+    struct address_index_outofbound: public index_outofbound
+    {
+      explicit address_index_outofbound(std::string&& loc)
+        : index_outofbound(std::move(loc), "address index is out of bound")
       {
       }
     };
@@ -339,11 +411,29 @@ namespace tools
     struct get_tx_pool_error : public refresh_error
     {
       explicit get_tx_pool_error(std::string&& loc)
-        : refresh_error(std::move(loc), "error getting tranaction pool")
+        : refresh_error(std::move(loc), "error getting transaction pool")
       {
       }
 
       std::string to_string() const { return refresh_error::to_string(); }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct out_of_hashchain_bounds_error : public refresh_error
+    {
+      explicit out_of_hashchain_bounds_error(std::string&& loc)
+        : refresh_error(std::move(loc), "Index out of bounds of of hashchain")
+      {
+      }
+
+      std::string to_string() const { return refresh_error::to_string(); }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct signature_check_failed : public wallet_logic_error
+    {
+      explicit signature_check_failed(std::string&& loc, const std::string& message)
+        : wallet_logic_error(std::move(loc), "Signature check failed " + message)
+      {
+      }
     };
     //----------------------------------------------------------------------------------------------------
     struct transfer_error : public wallet_logic_error
@@ -355,7 +445,7 @@ namespace tools
       }
     };
     //----------------------------------------------------------------------------------------------------
-    typedef failed_rpc_request<transfer_error, get_random_outs_error_message_index> get_random_outs_error;
+    typedef failed_rpc_request<transfer_error, get_outs_error_message_index> get_outs_error;
     //----------------------------------------------------------------------------------------------------
     struct not_enough_unlocked_money : public transfer_error
     {
@@ -479,13 +569,13 @@ namespace tools
         , sources_t const & sources
         , destinations_t const & destinations
         , uint64_t unlock_time
-        , bool testnet
+        , cryptonote::network_type nettype
         )
         : transfer_error(std::move(loc), "transaction was not constructed")
         , m_sources(sources)
         , m_destinations(destinations)
         , m_unlock_time(unlock_time)
-        , m_testnet(testnet)
+        , m_nettype(nettype)
       {
       }
 
@@ -519,7 +609,7 @@ namespace tools
         for (size_t i = 0; i < m_destinations.size(); ++i)
         {
           const cryptonote::tx_destination_entry& dst = m_destinations[i];
-          ss << "\n  " << i << ": " << cryptonote::get_account_address_as_str(m_testnet, dst.is_subaddress, dst.addr) << " " <<
+          ss << "\n  " << i << ": " << cryptonote::get_account_address_as_str(m_nettype, dst.is_subaddress, dst.addr) << " " <<
             cryptonote::print_money(dst.amount);
         }
 
@@ -532,7 +622,7 @@ namespace tools
       sources_t m_sources;
       destinations_t m_destinations;
       uint64_t m_unlock_time;
-      bool m_testnet;
+      cryptonote::network_type m_nettype;
     };
     //----------------------------------------------------------------------------------------------------
     struct tx_rejected : public transfer_error
@@ -574,12 +664,12 @@ namespace tools
           std::string && loc
         , const std::vector<cryptonote::tx_destination_entry>& destinations
         , uint64_t fee
-        , bool testnet
+        , cryptonote::network_type nettype
         )
         : transfer_error(std::move(loc), "transaction sum + fee exceeds " + cryptonote::print_money(std::numeric_limits<uint64_t>::max()))
         , m_destinations(destinations)
         , m_fee(fee)
-        , m_testnet(testnet)
+        , m_nettype(nettype)
       {
       }
 
@@ -594,7 +684,7 @@ namespace tools
           ", destinations:";
         for (const auto& dst : m_destinations)
         {
-          ss << '\n' << cryptonote::print_money(dst.amount) << " -> " << cryptonote::get_account_address_as_str(m_testnet, dst.is_subaddress, dst.addr);
+          ss << '\n' << cryptonote::print_money(dst.amount) << " -> " << cryptonote::get_account_address_as_str(m_nettype, dst.is_subaddress, dst.addr);
         }
         return ss.str();
       }
@@ -602,35 +692,52 @@ namespace tools
     private:
       std::vector<cryptonote::tx_destination_entry> m_destinations;
       uint64_t m_fee;
-      bool m_testnet;
+      cryptonote::network_type m_nettype;
     };
     //----------------------------------------------------------------------------------------------------
     struct tx_too_big : public transfer_error
     {
-      explicit tx_too_big(std::string&& loc, const cryptonote::transaction& tx, uint64_t tx_size_limit)
+      explicit tx_too_big(std::string&& loc, const cryptonote::transaction& tx, uint64_t tx_weight_limit)
         : transfer_error(std::move(loc), "transaction is too big")
         , m_tx(tx)
-        , m_tx_size_limit(tx_size_limit)
+        , m_tx_valid(true)
+        , m_tx_weight(cryptonote::get_transaction_weight(tx))
+        , m_tx_weight_limit(tx_weight_limit)
       {
       }
 
+      explicit tx_too_big(std::string&& loc, uint64_t tx_weight, uint64_t tx_weight_limit)
+        : transfer_error(std::move(loc), "transaction would be too big")
+        , m_tx_valid(false)
+        , m_tx_weight(tx_weight)
+        , m_tx_weight_limit(tx_weight_limit)
+      {
+      }
+
+      bool tx_valid() const { return m_tx_valid; }
       const cryptonote::transaction& tx() const { return m_tx; }
-      uint64_t tx_size_limit() const { return m_tx_size_limit; }
+      uint64_t tx_weight() const { return m_tx_weight; }
+      uint64_t tx_weight_limit() const { return m_tx_weight_limit; }
 
       std::string to_string() const
       {
         std::ostringstream ss;
-        cryptonote::transaction tx = m_tx;
         ss << transfer_error::to_string() <<
-          ", tx_size_limit = " << m_tx_size_limit <<
-          ", tx size = " << get_object_blobsize(m_tx) <<
-          ", tx:\n" << cryptonote::obj_to_json_str(tx);
+          ", tx_weight_limit = " << m_tx_weight_limit <<
+          ", tx weight = " << m_tx_weight;
+        if (m_tx_valid)
+        {
+          cryptonote::transaction tx = m_tx;
+          ss << ", tx:\n" << cryptonote::obj_to_json_str(tx);
+        }
         return ss.str();
       }
 
     private:
       cryptonote::transaction m_tx;
-      uint64_t m_tx_size_limit;
+      bool m_tx_valid;
+      uint64_t m_tx_weight;
+      uint64_t m_tx_weight_limit;
     };
     //----------------------------------------------------------------------------------------------------
     struct zero_destination : public transfer_error
@@ -675,6 +782,20 @@ namespace tools
       const std::string m_status;
     };
     //----------------------------------------------------------------------------------------------------
+    struct wallet_coded_rpc_error : public wallet_rpc_error
+    {
+      explicit wallet_coded_rpc_error(std::string&& loc, const std::string& request, int code, const std::string& status)
+        : wallet_rpc_error(std::move(loc), std::string("error ") + std::to_string(code) + (" in ") + request + " RPC: " + status, request),
+        m_code(code), m_status(status)
+      {
+      }
+      int code() const { return m_code; }
+      const std::string& status() const { return m_status; }
+    private:
+      int m_code;
+      const std::string m_status;
+    };
+    //----------------------------------------------------------------------------------------------------
     struct daemon_busy : public wallet_rpc_error
     {
       explicit daemon_busy(std::string&& loc, const std::string& request)
@@ -707,6 +828,22 @@ namespace tools
       }
     };
     //----------------------------------------------------------------------------------------------------
+    struct get_output_distribution : public wallet_rpc_error
+    {
+      explicit get_output_distribution(std::string&& loc, const std::string& request)
+        : wallet_rpc_error(std::move(loc), "failed to get output distribution", request)
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct payment_required: public wallet_rpc_error
+    {
+      explicit payment_required(std::string&& loc, const std::string& request)
+        : wallet_rpc_error(std::move(loc), "payment required", request)
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
     struct wallet_files_doesnt_correspond : public wallet_logic_error
     {
       explicit wallet_files_doesnt_correspond(std::string&& loc, const std::string& keys_file, const std::string& wallet_file)
@@ -722,6 +859,31 @@ namespace tools
     private:
       std::string m_keys_file;
       std::string m_wallet_file;
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct mms_error : public wallet_logic_error
+    {
+    protected:
+      explicit mms_error(std::string&& loc, const std::string& message)
+        : wallet_logic_error(std::move(loc), message)
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct no_connection_to_bitmessage : public mms_error
+    {
+      explicit no_connection_to_bitmessage(std::string&& loc, const std::string& address)
+        : mms_error(std::move(loc), "no connection to PyBitmessage at address " + address)
+      {
+      }
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct bitmessage_api_error : public mms_error
+    {
+      explicit bitmessage_api_error(std::string&& loc, const std::string& error_string)
+        : mms_error(std::move(loc), "PyBitmessage returned " + error_string)
+      {
+      }
     };
     //----------------------------------------------------------------------------------------------------
 

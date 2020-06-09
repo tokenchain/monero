@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -38,7 +38,7 @@ namespace
 {
   bool lift_up_difficulty(std::vector<test_event_entry>& events, std::vector<uint64_t>& timestamps,
                           std::vector<difficulty_type>& cummulative_difficulties, test_generator& generator,
-                          size_t new_block_count, const block blk_last, const account_base& miner_account)
+                          size_t new_block_count, const block &blk_last, const account_base& miner_account)
   {
     difficulty_type commulative_diffic = cummulative_difficulties.empty() ? 0 : cummulative_difficulties.back();
     block blk_prev = blk_last;
@@ -586,11 +586,11 @@ bool gen_block_invalid_binary_format::generate(std::vector<test_event_entry>& ev
   block blk_test;
   std::vector<crypto::hash> tx_hashes;
   tx_hashes.push_back(get_transaction_hash(tx_0));
-  size_t txs_size = get_object_blobsize(tx_0);
+  size_t txs_weight = get_transaction_weight(tx_0);
   diffic = next_difficulty(timestamps, cummulative_difficulties,DIFFICULTY_TARGET_V1);
   if (!generator.construct_block_manually(blk_test, blk_last, miner_account,
     test_generator::bf_diffic | test_generator::bf_timestamp | test_generator::bf_tx_hashes, 0, 0, blk_last.timestamp,
-    crypto::hash(), diffic, transaction(), tx_hashes, txs_size))
+    crypto::hash(), diffic, transaction(), tx_hashes, txs_weight))
     return false;
 
   blobdata blob = t_serializable_object_to_blob(blk_test);
@@ -637,6 +637,21 @@ bool gen_block_invalid_binary_format::check_all_blocks_purged(cryptonote::core& 
 
   CHECK_EQ(1, c.get_pool_transactions_count());
   CHECK_EQ(m_corrupt_blocks_begin_idx - 2, c.get_current_blockchain_height());
+
+  return true;
+}
+
+bool gen_block_late_v1_coinbase_tx::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  block blk_1;
+  generator.construct_block_manually(blk_1, blk_0, miner_account,
+      test_generator::bf_major_ver | test_generator::bf_minor_ver,
+      HF_VERSION_MIN_V2_COINBASE_TX, HF_VERSION_MIN_V2_COINBASE_TX);
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_purged");
 
   return true;
 }

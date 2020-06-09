@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2017, The Monero Project
+# Copyright (c) 2014-2019, The Monero Project
 #
 # All rights reserved.
 #
@@ -43,20 +43,21 @@ monero_add_executable(simplewallet
 target_link_libraries(simplewallet
   PRIVATE
     wallet
-    rpc
+    rpc_base
     cryptonote_core
     cncrypto
     common
     mnemonics
-    epee
     ${EPEE_READLINE}
     version
     ${Boost_CHRONO_LIBRARY}
     ${Boost_PROGRAM_OPTIONS_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
+    ${Boost_LOCALE_LIBRARY}
+    ${ICU_LIBRARIES}
     ${Boost_THREAD_LIBRARY}
-    ${Readline_LIBRARY}
     ${CMAKE_THREAD_LIBS_INIT}
+    ${GNU_READLINE_LIBRARY}
     ${EXTRA_LIBRARIES})
 set_property(TARGET simplewallet
   PROPERTY

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, The Monero Project
+// Copyright (c) 2017-2019, The Monero Project
 //
 // All rights reserved.
 //
@@ -47,13 +47,8 @@ namespace
     "8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"
     "6c7251d54154cfa92c173a0dd39c1f948b655970153799af2aeadc9ff1add0ea";
 
-  static std::uint8_t md[] = {
-    0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00
-  };
+  template<typename T> void *addressof(T &t) { return &t; }
+  template<> void *addressof(crypto::secret_key &k) { return addressof(unwrap(unwrap(k))); }
 
   template<typename T>
   bool is_formatted()
@@ -63,27 +58,11 @@ namespace
     static_assert(alignof(T) == 1, "T must have 1 byte alignment");
     static_assert(sizeof(T) <= sizeof(source), "T is too large for source");
     static_assert(sizeof(T) * 2 <= sizeof(expected), "T is too large for destination");
-    std::memcpy(std::addressof(value), source, sizeof(T));
+    std::memcpy(addressof(value), source, sizeof(T));
 
     std::stringstream out;
     out << "BEGIN" << value << "END";  
     return out.str() == "BEGIN<" + std::string{expected, sizeof(T) * 2} + ">END";
-  }
-
-  bool keccak_harness()
-  {
-    size_t inlen = sizeof(source);
-    int mdlen = (int)sizeof(md);
-    keccak(source, inlen, md, mdlen);
-
-    if (md[0] != 0x00)
-    {
-        return true;
-    }
-    else
-    {
-        return false;
-    }
   }
 }
 
@@ -96,4 +75,27 @@ TEST(Crypto, Ostream)
   EXPECT_TRUE(is_formatted<crypto::signature>());
   EXPECT_TRUE(is_formatted<crypto::key_derivation>());
   EXPECT_TRUE(is_formatted<crypto::key_image>());
+}
+
+TEST(Crypto, null_keys)
+{
+  char zero[32];
+  memset(zero, 0, 32);
+  ASSERT_EQ(memcmp(crypto::null_skey.data, zero, 32), 0);
+  ASSERT_EQ(memcmp(crypto::null_pkey.data, zero, 32), 0);
+}
+
+TEST(Crypto, verify_32)
+{
+  // all bytes are treated the same, so we can brute force just one byte
+  unsigned char k0[32] = {0}, k1[32] = {0};
+  for (unsigned int i0 = 0; i0 < 256; ++i0)
+  {
+    k0[0] = i0;
+    for (unsigned int i1 = 0; i1 < 256; ++i1)
+    {
+      k1[0] = i1;
+      ASSERT_EQ(!crypto_verify_32(k0, k1), i0 == i1);
+    }
+  }
 }

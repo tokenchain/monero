@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -34,6 +34,7 @@
 #include "include_base_utils.h"
 #include "misc_log_ex.h"
 #include "storages/levin_abstract_invoke2.h"
+#include "common/util.h"
 
 #include "net_load_tests.h"
 
@@ -132,7 +133,7 @@ namespace
 
     int handle_shutdown(int command, const CMD_SHUTDOWN::request& req, test_connection_context& /*context*/)
     {
-      LOG_PRINT_L0("Got shutdown requst. Shutting down...");
+      LOG_PRINT_L0("Got shutdown request. Shutting down...");
       m_tcp_server.send_stop_signal();
       return 1;
     }
@@ -146,7 +147,7 @@ namespace
           CMD_DATA_REQUEST::request req2;
           req2.data.resize(req.request_size);
 
-          bool r = epee::net_utils::async_invoke_remote_command2<CMD_DATA_REQUEST::response>(ctx.m_connection_id, CMD_DATA_REQUEST::ID, req2,
+          bool r = epee::net_utils::async_invoke_remote_command2<CMD_DATA_REQUEST::response>(ctx, CMD_DATA_REQUEST::ID, req2,
             m_tcp_server.get_config_object(), [=](int code, const CMD_DATA_REQUEST::response& rsp, const test_connection_context&) {
               if (code <= 0)
               {
@@ -215,6 +216,7 @@ namespace
 
 int main(int argc, char** argv)
 {
+  TRY_ENTRY();
   tools::on_startup();
   //set up logging options
   mlog_configure(mlog_get_default_log_path("net_load_tests_srv.log"), true);
@@ -233,4 +235,5 @@ int main(int argc, char** argv)
   if (!tcp_server.run_server(thread_count, true))
     return 2;
   return 0;
+  CATCH_ENTRY_L0("main", 1);
 }

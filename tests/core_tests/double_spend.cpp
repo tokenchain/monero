@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2017, The Monero Project
+// Copyright (c) 2014-2019, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -46,7 +46,7 @@ bool gen_double_spend_in_different_chains::generate(std::vector<test_event_entry
 {
   INIT_DOUBLE_SPEND_TEST();
 
-  SET_EVENT_VISITOR_SETT(events, event_visitor_settings::set_txs_keeped_by_block, true);
+  SET_EVENT_VISITOR_SETT(events, event_visitor_settings::set_txs_keeped_by_block);
   MAKE_TX(events, tx_1, bob_account, alice_account, send_amount / 2 - TESTS_DEFAULT_FEE, blk_1);
   events.pop_back();
   MAKE_TX(events, tx_2, bob_account, alice_account, send_amount - TESTS_DEFAULT_FEE, blk_1);
@@ -73,7 +73,7 @@ bool gen_double_spend_in_different_chains::check_double_spend(cryptonote::core& 
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_double_spend_in_different_chains::check_double_spend");
 
-  std::list<block> block_list;
+  std::vector<block> block_list;
   bool r = c.get_blocks(0, 100 + 2 * CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW, block_list);
   CHECK_TEST_CONDITION(r);
 
@@ -96,3 +96,4 @@ bool gen_double_spend_in_different_chains::check_double_spend(cryptonote::core& 
 
   return true;
 }
+
